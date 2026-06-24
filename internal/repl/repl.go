@@ -6,6 +6,9 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/vatsalpatel/sqlette/internal/lexer"
+	"github.com/vatsalpatel/sqlette/internal/parser"
 )
 
 const (
@@ -13,9 +16,10 @@ const (
 	promptCont = "   ...> "
 )
 
-// Run reads statements from in until EOF, echoing each completed statement to
-// out. Dot-commands such as .exit are handled inline. Prompts are shown only
-// when in is an interactive terminal. It returns a process exit code.
+// Run reads statements from in until EOF, parsing each completed statement and
+// printing its AST to out. Dot-commands such as .exit are handled inline.
+// Prompts are shown only when in is an interactive terminal. It returns a
+// process exit code.
 func Run(in io.Reader, out io.Writer) int {
 	reader := bufio.NewReader(in)
 	interactive := isTerminal(in)
@@ -31,7 +35,7 @@ func Run(in io.Reader, out io.Writer) int {
 				return 0
 			}
 			if stmt, ready := scan.Push(line); ready && stmt != "" {
-				fmt.Fprintln(out, stmt)
+				printResult(out, stmt)
 			}
 		}
 
@@ -43,6 +47,20 @@ func Run(in io.Reader, out io.Writer) int {
 		}
 		prompt(out, &scan, interactive)
 	}
+}
+
+func printResult(out io.Writer, stmt string) {
+	toks, err := lexer.Lex(stmt)
+	if err != nil {
+		fmt.Fprintln(out, err)
+		return
+	}
+	node, err := parser.Parse(toks)
+	if err != nil {
+		fmt.Fprintln(out, err)
+		return
+	}
+	fmt.Fprintln(out, node)
 }
 
 func prompt(out io.Writer, scan *Scanner, interactive bool) {

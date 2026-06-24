@@ -18,6 +18,7 @@ const (
 	INT    // 30
 	FLOAT  // 3.14, 1e-9
 	STRING // 'a string'
+	TEXT
 
 	// keywords
 	SELECT
@@ -58,7 +59,7 @@ const (
 )
 
 // Token is one lexical unit. Lexeme holds the token's text; for STRING and
-// quoted IDENT it is the decoded value (quotes stripped, "" / '' unescaped),
+// quoted IDENT it is the decoded value (quotes stripped, "" / ” unescaped),
 // not the raw source slice. Pos is the byte offset where the token starts.
 type Token struct {
 	Kind   Kind
