@@ -10,9 +10,10 @@ type (
 	ColumnRef struct {
 		Table string
 		Name  string
-		Alias string
 	}
-	Star  struct{}
+	Star struct {
+		Table string
+	}
 	Unary struct {
 		Operand Expression
 		Op      token.Kind
