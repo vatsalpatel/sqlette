@@ -232,6 +232,12 @@ func TestParseErrors(t *testing.T) {
 		{"unclosed paren", "SELECT (a FROM t", "expected RPAREN"},
 		{"empty input", "", "expected a statement"},
 		{"dangling operator", "SELECT a + FROM t", "expected an expression"},
+		{"insert missing into", "INSERT users VALUES (1)", "expected INTO"},
+		{"insert missing values", "INSERT INTO t", "expected VALUES"},
+		{"insert row without parens", "INSERT INTO t VALUES 1", "expected LPAREN"},
+		{"create missing table keyword", "CREATE t (id INT)", "expected TABLE"},
+		{"create missing columns", "CREATE TABLE t", "expected LPAREN"},
+		{"create primary without key", "CREATE TABLE t (id INT PRIMARY)", "expected KEY"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -243,6 +249,91 @@ func TestParseErrors(t *testing.T) {
 				t.Fatalf("Parse(%q): expected an error, got nil", tt.src)
 			} else if !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Parse(%q): error %q does not contain %q", tt.src, err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestParseInsert(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want *ast.InsertStmt
+	}{
+		{"with column list", "INSERT INTO users (id, name) VALUES (1, 'alice')", &ast.InsertStmt{
+			Table:   "users",
+			Columns: []ast.ColumnRef{{Name: "id"}, {Name: "name"}},
+			Rows:    [][]ast.Expression{{intLit("1"), lit(token.STRING, "alice")}},
+		}},
+		{"no column list", "INSERT INTO users VALUES (1, 'bob')", &ast.InsertStmt{
+			Table: "users",
+			Rows:  [][]ast.Expression{{intLit("1"), lit(token.STRING, "bob")}},
+		}},
+		{"multiple rows", "INSERT INTO t VALUES (1, 2), (3, 4)", &ast.InsertStmt{
+			Table: "t",
+			Rows: [][]ast.Expression{
+				{intLit("1"), intLit("2")},
+				{intLit("3"), intLit("4")},
+			},
+		}},
+		{"expression value", "INSERT INTO t (a) VALUES (1 + 2)", &ast.InsertStmt{
+			Table:   "t",
+			Columns: []ast.ColumnRef{{Name: "a"}},
+			Rows:    [][]ast.Expression{{bin(token.PLUS, intLit("1"), intLit("2"))}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mustParse(t, tt.src)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Parse(%q)\n got: %#v\nwant: %#v", tt.src, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseCreate(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want *ast.CreateStmt
+	}{
+		{"basic", "CREATE TABLE t (id INT, name TEXT)", &ast.CreateStmt{
+			Table: "t",
+			Columns: []ast.ColumnDef{
+				{Name: "id", Type: "INT"},
+				{Name: "name", Type: "TEXT"},
+			},
+		}},
+		{"primary key", "CREATE TABLE users (id INT PRIMARY KEY, name TEXT)", &ast.CreateStmt{
+			Table: "users",
+			Columns: []ast.ColumnDef{
+				{Name: "id", Type: "INT", PrimaryKey: true},
+				{Name: "name", Type: "TEXT"},
+			},
+		}},
+		{"not null", "CREATE TABLE t (id INT NOT NULL)", &ast.CreateStmt{
+			Table:   "t",
+			Columns: []ast.ColumnDef{{Name: "id", Type: "INT", NotNull: true}},
+		}},
+		{"primary key and not null", "CREATE TABLE t (id INT PRIMARY KEY NOT NULL)", &ast.CreateStmt{
+			Table:   "t",
+			Columns: []ast.ColumnDef{{Name: "id", Type: "INT", PrimaryKey: true, NotNull: true}},
+		}},
+		{"not null and primary key", "CREATE TABLE t (id INT NOT NULL PRIMARY KEY)", &ast.CreateStmt{
+			Table:   "t",
+			Columns: []ast.ColumnDef{{Name: "id", Type: "INT", PrimaryKey: true, NotNull: true}},
+		}},
+		{"single column", "CREATE TABLE t (id INT)", &ast.CreateStmt{
+			Table:   "t",
+			Columns: []ast.ColumnDef{{Name: "id", Type: "INT"}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mustParse(t, tt.src)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Parse(%q)\n got: %#v\nwant: %#v", tt.src, got, tt.want)
 			}
 		})
 	}

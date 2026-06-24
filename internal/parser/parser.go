@@ -43,6 +43,10 @@ func (p *parser) parseStmt() (ast.Statement, error) {
 	switch peek.Kind {
 	case token.SELECT:
 		return p.parseSelect()
+	case token.INSERT:
+		return p.parseInsert()
+	case token.CREATE:
+		return p.parseCreate()
 	default:
 		return nil, Error{Pos: peek.Pos, Msg: fmt.Sprintf("expected a statement, got %s", peek)}
 	}
@@ -201,6 +205,147 @@ func prefixBP(tok token.Kind) int {
 	default:
 		return 0
 	}
+}
+
+func (p *parser) parseInsert() (ast.Statement, error) {
+	p.advance() // skip INSERT
+	if _, err := p.expect(token.INTO); err != nil {
+		return nil, err
+	}
+
+	stmt := &ast.InsertStmt{}
+	tbl, err := p.expect(token.IDENT)
+	if err != nil {
+		return nil, err
+	}
+	stmt.Table = tbl.Lexeme
+
+	if p.accept(token.LPAREN) {
+		cols, err := p.parseColumnList()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Columns = cols
+		if !p.accept(token.RPAREN) {
+			return nil, Error{Pos: p.peek().Pos, Msg: "expected )"}
+		}
+	}
+
+	if _, err := p.expect(token.VALUES); err != nil {
+		return nil, err
+	}
+	for {
+		row, err := p.parseRow()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Rows = append(stmt.Rows, row)
+		if !p.accept(token.COMMA) {
+			break
+		}
+	}
+
+	return stmt, nil
+}
+
+func (p *parser) parseColumnList() ([]ast.ColumnRef, error) {
+	var cols []ast.ColumnRef
+	for {
+		name, err := p.expect(token.IDENT)
+		if err != nil {
+			return nil, err
+		}
+		cols = append(cols, ast.ColumnRef{Name: name.Lexeme})
+		if !p.accept(token.COMMA) {
+			break
+		}
+	}
+	return cols, nil
+}
+
+func (p *parser) parseRow() ([]ast.Expression, error) {
+	if _, err := p.expect(token.LPAREN); err != nil {
+		return nil, err
+	}
+
+	exprs := []ast.Expression{}
+	for {
+		expr, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		exprs = append(exprs, expr)
+		if !p.accept(token.COMMA) {
+			break
+		}
+	}
+
+	if _, err := p.expect(token.RPAREN); err != nil {
+		return nil, err
+	}
+	return exprs, nil
+}
+
+func (p *parser) parseCreate() (ast.Statement, error) {
+	p.advance() // skip CREATE
+	if !p.accept(token.TABLE) {
+		return nil, Error{Pos: p.peek().Pos, Msg: "expected TABLE"}
+	}
+
+	stmt := &ast.CreateStmt{}
+	tbl, err := p.expect(token.IDENT)
+	if err != nil {
+		return nil, err
+	}
+	stmt.Table = tbl.Lexeme
+
+	if _, err := p.expect(token.LPAREN); err != nil {
+		return nil, err
+	}
+	for {
+		name, err := p.expect(token.IDENT)
+		if err != nil {
+			return nil, err
+		}
+		typ, err := p.expect(token.IDENT)
+		if err != nil {
+			return nil, err
+		}
+
+		pk := false
+		notNull := false
+		for {
+			if p.accept(token.PRIMARY) {
+				if _, err := p.expect(token.KEY); err != nil {
+					return nil, err
+				}
+				pk = true
+			} else if p.accept(token.NOT) {
+				if _, err := p.expect(token.NULL); err != nil {
+					return nil, err
+				}
+				notNull = true
+			} else {
+				break
+			}
+		}
+
+		stmt.Columns = append(stmt.Columns, ast.ColumnDef{
+			Name:       name.Lexeme,
+			Type:       typ.Lexeme,
+			PrimaryKey: pk,
+			NotNull:    notNull,
+		})
+
+		if !p.accept(token.COMMA) {
+			break
+		}
+	}
+	if !p.accept(token.RPAREN) {
+		return nil, Error{Pos: p.peek().Pos, Msg: "expected )"}
+	}
+
+	return stmt, nil
 }
 
 // --- cursor helpers ---

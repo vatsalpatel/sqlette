@@ -16,10 +16,27 @@ type TableRef struct {
 	Alias string
 }
 
-type InsertStmt struct{}
+type InsertStmt struct {
+	Table   string
+	Columns []ColumnRef
+	Rows    [][]Expression
+}
+
 type UpdateStmt struct{}
 type DeleteStmt struct{}
-type CreateStmt struct{}
+
+type CreateStmt struct {
+	Table   string
+	Columns []ColumnDef
+}
+
+type ColumnDef struct {
+	Name       string
+	Type       string
+	PrimaryKey bool
+	NotNull    bool
+}
+
 type DropStmt struct{}
 type AlterStmt struct{}
 
