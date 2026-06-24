@@ -1,12 +1,12 @@
-package parser
+package parser_test
 
 import (
-	"reflect"
-	"strings"
 	"testing"
 
+	"github.com/vatsalpatel/sqlette/internal/assert"
 	"github.com/vatsalpatel/sqlette/internal/ast"
 	"github.com/vatsalpatel/sqlette/internal/lexer"
+	"github.com/vatsalpatel/sqlette/internal/parser"
 	"github.com/vatsalpatel/sqlette/internal/token"
 )
 
@@ -25,31 +25,19 @@ func un(op token.Kind, e ast.Expression) *ast.Unary {
 func mustParse(t *testing.T, src string) ast.Statement {
 	t.Helper()
 	toks, err := lexer.Lex(src)
-	if err != nil {
-		t.Fatalf("lex(%q): %v", src, err)
-	}
-	stmt, err := Parse(toks)
-	if err != nil {
-		t.Fatalf("Parse(%q): %v", src, err)
-	}
+	assert.NoError(t, err)
+	stmt, err := parser.Parse(toks)
+	assert.NoError(t, err)
 	return stmt
 }
 
 func mustParseExpr(t *testing.T, src string) ast.Expression {
 	t.Helper()
-	toks, err := lexer.Lex(src)
-	if err != nil {
-		t.Fatalf("lex(%q): %v", src, err)
-	}
-	p := &parser{toks: toks}
-	e, err := p.parseExpr(0)
-	if err != nil {
-		t.Fatalf("parseExpr(%q): %v", src, err)
-	}
-	if !p.at(token.EOF) {
-		t.Fatalf("parseExpr(%q): stopped early at %s", src, p.peek())
-	}
-	return e
+	stmt := mustParse(t, "SELECT "+src)
+	sel, ok := stmt.(*ast.SelectStmt)
+	assert.True(t, ok)
+	assert.Equal(t, 1, len(sel.Columns))
+	return sel.Columns[0].Expr
 }
 
 func TestParseSelect(t *testing.T) {
@@ -127,10 +115,7 @@ func TestParseSelect(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mustParse(t, tt.src)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("Parse(%q)\n got: %#v\nwant: %#v", tt.src, got, tt.want)
-			}
+			assert.DeepEqual(t, tt.want, mustParse(t, tt.src))
 		})
 	}
 }
@@ -150,10 +135,7 @@ func TestParseLiterals(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mustParseExpr(t, tt.src)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("parseExpr(%q)\n got: %#v\nwant: %#v", tt.src, got, tt.want)
-			}
+			assert.DeepEqual(t, tt.want, mustParseExpr(t, tt.src))
 		})
 	}
 }
@@ -212,10 +194,7 @@ func TestParseExprPrecedence(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mustParseExpr(t, tt.src)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("parseExpr(%q)\n got: %#v\nwant: %#v", tt.src, got, tt.want)
-			}
+			assert.DeepEqual(t, tt.want, mustParseExpr(t, tt.src))
 		})
 	}
 }
@@ -242,14 +221,9 @@ func TestParseErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			toks, err := lexer.Lex(tt.src)
-			if err != nil {
-				t.Fatalf("lex(%q): %v", tt.src, err)
-			}
-			if _, err := Parse(toks); err == nil {
-				t.Fatalf("Parse(%q): expected an error, got nil", tt.src)
-			} else if !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("Parse(%q): error %q does not contain %q", tt.src, err.Error(), tt.want)
-			}
+			assert.NoError(t, err)
+			_, err = parser.Parse(toks)
+			assert.ErrorContains(t, err, tt.want)
 		})
 	}
 }
@@ -284,10 +258,7 @@ func TestParseInsert(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mustParse(t, tt.src)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("Parse(%q)\n got: %#v\nwant: %#v", tt.src, got, tt.want)
-			}
+			assert.DeepEqual(t, tt.want, mustParse(t, tt.src))
 		})
 	}
 }
@@ -331,10 +302,7 @@ func TestParseCreate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mustParse(t, tt.src)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("Parse(%q)\n got: %#v\nwant: %#v", tt.src, got, tt.want)
-			}
+			assert.DeepEqual(t, tt.want, mustParse(t, tt.src))
 		})
 	}
 }

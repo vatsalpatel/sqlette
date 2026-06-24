@@ -1,9 +1,10 @@
-package lexer
+package lexer_test
 
 import (
-	"strings"
 	"testing"
 
+	"github.com/vatsalpatel/sqlette/internal/assert"
+	"github.com/vatsalpatel/sqlette/internal/lexer"
 	"github.com/vatsalpatel/sqlette/internal/token"
 )
 
@@ -242,10 +243,8 @@ func TestLexGotchas(t *testing.T) {
 
 func TestLexPositions(t *testing.T) {
 	const src = "SELECT name FROM users WHERE age > 30"
-	got, err := Lex(src)
-	if err != nil {
-		t.Fatalf("Lex(%q): unexpected error: %v", src, err)
-	}
+	got, err := lexer.Lex(src)
+	assert.NoError(t, err)
 	want := []token.Token{
 		{Kind: token.SELECT, Lexeme: "SELECT", Pos: 0},
 		{Kind: token.IDENT, Lexeme: "name", Pos: 7},
@@ -257,13 +256,9 @@ func TestLexPositions(t *testing.T) {
 		{Kind: token.INT, Lexeme: "30", Pos: 35},
 		{Kind: token.EOF, Lexeme: "", Pos: 37},
 	}
-	if len(got) != len(want) {
-		t.Fatalf("Lex(%q): got %d tokens %v, want %d", src, len(got), got, len(want))
-	}
+	assert.Equal(t, len(want), len(got))
 	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("token %d = %+v, want %+v", i, got[i], want[i])
-		}
+		assert.Equal(t, want[i], got[i])
 	}
 }
 
@@ -272,22 +267,16 @@ func TestLexStringPositionUsesRawSpan(t *testing.T) {
 	// span 'it''s'; the next token's Pos must come from the raw span, not the
 	// decoded length.
 	const src = "'it''s' x"
-	got, err := Lex(src)
-	if err != nil {
-		t.Fatalf("Lex(%q): unexpected error: %v", src, err)
-	}
+	got, err := lexer.Lex(src)
+	assert.NoError(t, err)
 	want := []token.Token{
 		{Kind: token.STRING, Lexeme: "it's", Pos: 0},
 		{Kind: token.IDENT, Lexeme: "x", Pos: 8},
 		{Kind: token.EOF, Lexeme: "", Pos: 9},
 	}
-	if len(got) != len(want) {
-		t.Fatalf("Lex(%q): got %d tokens %v, want %d", src, len(got), got, len(want))
-	}
+	assert.Equal(t, len(want), len(got))
 	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("token %d = %+v, want %+v", i, got[i], want[i])
-		}
+		assert.Equal(t, want[i], got[i])
 	}
 }
 
@@ -345,42 +334,30 @@ func tok(k token.Kind, lexeme string) token.Token {
 // (Kind and Lexeme only, ignoring Pos) equal want followed by an implicit EOF.
 func assertTokens(t *testing.T, src string, want ...token.Token) {
 	t.Helper()
-	got, err := Lex(src)
-	if err != nil {
-		t.Fatalf("Lex(%q): unexpected error: %v", src, err)
-	}
-	assertStream(t, src, got, want)
+	got, err := lexer.Lex(src)
+	assert.NoError(t, err)
+	assertStream(t, got, want)
 }
 
 // assertError lexes src, requires an error containing msg, and checks the tokens
 // (including any ILLEGAL) equal want followed by EOF — proving error recovery.
 func assertError(t *testing.T, src, msg string, want ...token.Token) {
 	t.Helper()
-	got, err := Lex(src)
-	if err == nil {
-		t.Fatalf("Lex(%q): want error containing %q, got nil", src, msg)
-	}
-	if !strings.Contains(err.Error(), msg) {
-		t.Errorf("Lex(%q): error = %q, want substring %q", src, err.Error(), msg)
-	}
-	assertStream(t, src, got, want)
+	got, err := lexer.Lex(src)
+	assert.ErrorContains(t, err, msg)
+	assertStream(t, got, want)
 }
 
 // assertStream verifies got ends in EOF and its non-EOF tokens match want by
 // Kind and Lexeme. want lists the real tokens only; the trailing EOF is implied.
-func assertStream(t *testing.T, src string, got, want []token.Token) {
+func assertStream(t *testing.T, got, want []token.Token) {
 	t.Helper()
-	n := len(got)
-	if n == 0 || got[n-1].Kind != token.EOF {
-		t.Fatalf("Lex(%q): stream must end in EOF, got %v", src, got)
-	}
-	got = got[:n-1]
-	if len(got) != len(want) {
-		t.Fatalf("Lex(%q): got %d tokens %v, want %d %v", src, len(got), got, len(want), want)
-	}
+	assert.True(t, len(got) > 0)
+	assert.Equal(t, token.EOF, got[len(got)-1].Kind)
+	got = got[:len(got)-1]
+	assert.Equal(t, len(want), len(got))
 	for i := range want {
-		if got[i].Kind != want[i].Kind || got[i].Lexeme != want[i].Lexeme {
-			t.Errorf("Lex(%q): token %d = %s, want %s", src, i, got[i], want[i])
-		}
+		assert.Equal(t, want[i].Kind, got[i].Kind)
+		assert.Equal(t, want[i].Lexeme, got[i].Lexeme)
 	}
 }

@@ -1,6 +1,10 @@
 package repl
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/vatsalpatel/sqlette/internal/assert"
+)
 
 func TestScannerPush(t *testing.T) {
 	tests := []struct {
@@ -26,11 +30,11 @@ func TestScannerPush(t *testing.T) {
 			for i, line := range tt.lines {
 				stmt, ready = s.Push(line)
 				if i < len(tt.lines)-1 {
-					assertFalse(t, ready)
+					assert.False(t, ready)
 				}
 			}
-			assertEqual(t, tt.wantStmt, stmt)
-			assertEqual(t, tt.wantReady, ready)
+			assert.Equal(t, tt.wantStmt, stmt)
+			assert.Equal(t, tt.wantReady, ready)
 		})
 	}
 }
@@ -39,23 +43,23 @@ func TestScannerBackToBack(t *testing.T) {
 	var s Scanner
 
 	stmt, ready := s.Push("SELECT 1;")
-	assertTrue(t, ready)
-	assertEqual(t, "SELECT 1", stmt)
+	assert.True(t, ready)
+	assert.Equal(t, "SELECT 1", stmt)
 
 	stmt, ready = s.Push("SELECT 2;")
-	assertTrue(t, ready)
-	assertEqual(t, "SELECT 2", stmt)
+	assert.True(t, ready)
+	assert.Equal(t, "SELECT 2", stmt)
 }
 
 func TestScannerPending(t *testing.T) {
 	var s Scanner
-	assertFalse(t, s.Pending())
+	assert.False(t, s.Pending())
 
 	_, ready := s.Push("SELECT 1")
-	assertFalse(t, ready)
-	assertTrue(t, s.Pending())
+	assert.False(t, ready)
+	assert.True(t, s.Pending())
 
 	_, ready = s.Push("1;")
-	assertTrue(t, ready)
-	assertFalse(t, s.Pending())
+	assert.True(t, ready)
+	assert.False(t, s.Pending())
 }

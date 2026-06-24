@@ -3,6 +3,8 @@ package repl
 import (
 	"strings"
 	"testing"
+
+	"github.com/vatsalpatel/sqlette/internal/assert"
 )
 
 func TestRunParse(t *testing.T) {
@@ -10,6 +12,6 @@ func TestRunParse(t *testing.T) {
 	var out strings.Builder
 
 	code := Run(in, &out)
-	assertEqual(t, 0, code)
-	assertEqual(t, "(select (cols (+ 1 1)))\n", out.String())
+	assert.Equal(t, 0, code)
+	assert.Equal(t, "(select (cols (+ 1 1)))\n", out.String())
 }
