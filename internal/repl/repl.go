@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/vatsalpatel/sqlette/internal/engine"
 	"github.com/vatsalpatel/sqlette/internal/lexer"
 	"github.com/vatsalpatel/sqlette/internal/parser"
 )
@@ -24,6 +25,7 @@ func Run(in io.Reader, out io.Writer) int {
 	reader := bufio.NewReader(in)
 	interactive := isTerminal(in)
 	var scan Scanner
+	eng := engine.New()
 
 	prompt(out, &scan, interactive)
 	for {
@@ -35,7 +37,7 @@ func Run(in io.Reader, out io.Writer) int {
 				return 0
 			}
 			if stmt, ready := scan.Push(line); ready && stmt != "" {
-				printResult(out, stmt)
+				execute(out, eng, stmt)
 			}
 		}
 
@@ -49,18 +51,44 @@ func Run(in io.Reader, out io.Writer) int {
 	}
 }
 
-func printResult(out io.Writer, stmt string) {
-	toks, err := lexer.Lex(stmt)
+// create table users (id int, name text);
+// insert into users values (1, 'ada'), (2, 'alan'), (3, 'grace');
+// select * from users;
+func execute(out io.Writer, eng *engine.Engine, query string) {
+	tokens, err := lexer.Lex(query)
 	if err != nil {
 		fmt.Fprintln(out, err)
 		return
 	}
-	node, err := parser.Parse(toks)
+	stmt, err := parser.Parse(tokens)
 	if err != nil {
 		fmt.Fprintln(out, err)
 		return
 	}
-	fmt.Fprintln(out, node)
+	res, err := eng.Exec(stmt)
+	if err != nil {
+		fmt.Fprintln(out, err)
+		return
+	}
+	formatResult(out, res)
+}
+
+func formatResult(out io.Writer, res *engine.Result) {
+	if len(res.Rows) == 0 {
+		if res.Message != "" {
+			fmt.Fprintln(out, res.Message)
+		}
+		return
+	}
+	fmt.Fprintln(out, strings.Join(res.Columns, " | "))
+	for _, r := range res.Rows {
+		row := make([]string, len(r))
+		for i, v := range r {
+			row[i] = v.String()
+		}
+		fmt.Fprintln(out, strings.Join(row, " | "))
+	}
+
 }
 
 func prompt(out io.Writer, scan *Scanner, interactive bool) {
