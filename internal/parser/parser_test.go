@@ -189,8 +189,10 @@ func TestParseExprPrecedence(t *testing.T) {
 			bin(token.STAR, intLit("2"), bin(token.PLUS, intLit("3"), intLit("4")))},
 		{"redundant parens collapse", "((a))", col("a")},
 		// once IS is handled (an infix op that swallows NULL / NOT NULL):
-		// {"is null", "a IS NULL",
-		// 	bin(token.IS, col("a"), &ast.Literal{Kind: token.NULL, Value: "NULL"})},
+		{"is null", "a IS NULL",
+			bin(token.IS, col("a"), &ast.Literal{Kind: token.NULL, Value: "NULL"})},
+		{"is not null", "a IS NOT NULL",
+			un(token.NOT, bin(token.IS, col("a"), &ast.Literal{Kind: token.NULL, Value: "NULL"}))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

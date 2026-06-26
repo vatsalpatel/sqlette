@@ -10,8 +10,8 @@ type Catalog struct {
 }
 
 type Table struct {
-	Name   string
-	Column []Column
+	Name    string
+	Columns []Column
 }
 
 type Column struct {
@@ -42,7 +42,7 @@ func (c *Catalog) Get(name string) (*Table, bool) {
 }
 
 func (t *Table) ColumnIndex(name string) (int, bool) {
-	for i, c := range t.Column {
+	for i, c := range t.Columns {
 		if strings.EqualFold(c.Name, name) {
 			return i, true
 		}

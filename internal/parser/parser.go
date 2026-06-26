@@ -47,6 +47,8 @@ func (p *parser) parseStmt() (ast.Statement, error) {
 		return p.parseInsert()
 	case token.CREATE:
 		return p.parseCreate()
+	case token.EXPLAIN:
+		return p.parseExplain()
 	default:
 		return nil, Error{Pos: peek.Pos, Msg: fmt.Sprintf("expected a statement, got %s", peek)}
 	}
@@ -127,6 +129,23 @@ func (p *parser) parseExpr(minBP int) (ast.Expression, error) {
 			return left, nil
 		}
 		p.advance()
+
+		if tok.Kind == token.IS {
+			var right ast.Expression
+			negated := false
+			if p.accept(token.NOT) {
+				negated = true
+			}
+			if p.accept(token.NULL) {
+				right = &ast.Binary{Left: left, Op: token.IS, Right: &ast.Literal{Kind: token.NULL, Value: "NULL"}}
+				if negated {
+					right = &ast.Unary{Op: token.NOT, Operand: right}
+				}
+				left = right
+				continue
+			}
+		}
+
 		right, err := p.parseExpr(bp)
 		if err != nil {
 			return nil, err
@@ -183,7 +202,7 @@ func infixBP(tok token.Kind) int {
 		return 10
 	case token.AND:
 		return 20
-	case token.EQ, token.NEQ, token.LT, token.LTE, token.GT, token.GTE:
+	case token.EQ, token.NEQ, token.LT, token.LTE, token.GT, token.GTE, token.IS:
 		return 40
 	case token.PLUS, token.MINUS:
 		return 50
@@ -346,6 +365,20 @@ func (p *parser) parseCreate() (ast.Statement, error) {
 	}
 
 	return stmt, nil
+}
+
+func (p *parser) parseExplain() (ast.Statement, error) {
+	p.advance() // skip EXPLAIN
+	if p.accept(token.QUERY) {
+		if _, err := p.expect(token.PLAN); err != nil {
+			return nil, err
+		}
+	}
+	stmt, err := p.parseStmt()
+	if err != nil {
+		return nil, err
+	}
+	return &ast.ExplainStmt{Stmt: stmt}, nil
 }
 
 // --- cursor helpers ---

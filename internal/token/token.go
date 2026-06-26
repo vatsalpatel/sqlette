@@ -18,7 +18,6 @@ const (
 	INT    // 30
 	FLOAT  // 3.14, 1e-9
 	STRING // 'a string'
-	TEXT
 
 	// keywords
 	SELECT
@@ -37,6 +36,11 @@ const (
 	AS
 	PRIMARY
 	KEY
+	TRUE  // true
+	FALSE // false
+	EXPLAIN
+	QUERY
+	PLAN
 
 	// operators & punctuation
 	EQ        // =
@@ -94,6 +98,11 @@ var keywords = map[string]Kind{
 	"AS":      AS,
 	"PRIMARY": PRIMARY,
 	"KEY":     KEY,
+	"TRUE":    TRUE,
+	"FALSE":   FALSE,
+	"EXPLAIN": EXPLAIN,
+	"QUERY":   QUERY,
+	"PLAN":    PLAN,
 }
 
 // Lookup maps a bare identifier to its keyword Kind, or IDENT if it is not a
@@ -130,6 +139,8 @@ var kindNames = map[Kind]string{
 	AS:        "AS",
 	PRIMARY:   "PRIMARY",
 	KEY:       "KEY",
+	TRUE:      "TRUE",
+	FALSE:     "FALSE",
 	EQ:        "EQ",
 	NEQ:       "NEQ",
 	LT:        "LT",

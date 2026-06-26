@@ -10,7 +10,7 @@ import (
 func sampleTable() *catalog.Table {
 	return &catalog.Table{
 		Name: "users",
-		Column: []catalog.Column{
+		Columns: []catalog.Column{
 			{Name: "id", Type: "INT", PrimaryKey: true},
 			{Name: "name", Type: "TEXT", NotNull: true},
 			{Name: "age", Type: "INT"},
@@ -76,7 +76,7 @@ func TestGetIsCaseInsensitive(t *testing.T) {
 	c := catalog.New()
 	tbl := &catalog.Table{
 		Name: "Users",
-		Column: []catalog.Column{
+		Columns: []catalog.Column{
 			{Name: "id", Type: "INT", PrimaryKey: true},
 		},
 	}

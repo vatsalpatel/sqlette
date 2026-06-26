@@ -40,10 +40,15 @@ type ColumnDef struct {
 type DropStmt struct{}
 type AlterStmt struct{}
 
-func (s *SelectStmt) stmtNode() {}
-func (s *InsertStmt) stmtNode() {}
-func (s *UpdateStmt) stmtNode() {}
-func (s *DeleteStmt) stmtNode() {}
-func (s *CreateStmt) stmtNode() {}
-func (s *DropStmt) stmtNode()   {}
-func (s *AlterStmt) stmtNode()  {}
+type ExplainStmt struct {
+	Stmt Statement
+}
+
+func (s *SelectStmt) stmtNode()  {}
+func (s *InsertStmt) stmtNode()  {}
+func (s *UpdateStmt) stmtNode()  {}
+func (s *DeleteStmt) stmtNode()  {}
+func (s *CreateStmt) stmtNode()  {}
+func (s *DropStmt) stmtNode()    {}
+func (s *AlterStmt) stmtNode()   {}
+func (s *ExplainStmt) stmtNode() {}
