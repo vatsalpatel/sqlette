@@ -8,6 +8,7 @@ import (
 	"github.com/vatsalpatel/sqlette/internal/ast"
 	"github.com/vatsalpatel/sqlette/internal/catalog"
 	"github.com/vatsalpatel/sqlette/internal/exec"
+	"github.com/vatsalpatel/sqlette/internal/pager"
 	"github.com/vatsalpatel/sqlette/internal/plan"
 	"github.com/vatsalpatel/sqlette/internal/storage"
 	"github.com/vatsalpatel/sqlette/internal/values"
@@ -25,15 +26,40 @@ type Engine struct {
 }
 
 func New() (*Engine, error) {
-	store, err := storage.Open("")
+	return Open("")
+}
+
+func Open(path string) (*Engine, error) {
+	store, err := storage.Open(path)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	e := &Engine{
-		cat:   catalog.New(),
-		store: store,
+	cat := catalog.New()
+	blob, err := store.ReadSchema()
+	if err != nil {
+		return nil, err
 	}
-	return e, nil
+	if err := cat.Unmarshal(blob); err != nil {
+		return nil, err
+	}
+	for name, tbl := range cat.Tables {
+		if err := store.AttachTable(name, tbl.RootPage); err != nil {
+			return nil, err
+		}
+	}
+	return &Engine{cat: cat, store: store}, nil
+}
+
+func (e Engine) Close() error {
+	for name, ctbl := range e.cat.Tables {
+		if stbl, ok := e.store.Table(name); ok {
+			ctbl.RootPage = stbl.Root()
+		}
+	}
+	if err := e.store.WriteSchema(e.cat.Marshal()); err != nil {
+		return err
+	}
+	return e.store.Close()
 }
 
 func (e *Engine) Exec(stmt ast.Statement) (*Result, error) {
@@ -56,14 +82,24 @@ func (e *Engine) execCreate(stmt *ast.CreateStmt) (*Result, error) {
 	for i, col := range stmt.Columns {
 		cols[i] = catalog.Column{Name: col.Name, Type: col.Type, PrimaryKey: col.PrimaryKey, NotNull: col.NotNull}
 	}
-	if err := e.cat.Create(&catalog.Table{
-		Name:    stmt.Table,
-		Columns: cols,
-	}); err != nil {
+	ctbl := &catalog.Table{
+		Name:     strings.ToLower(stmt.Table),
+		Columns:  cols,
+		RootPage: pager.PageID(0),
+	}
+	if err := e.cat.Create(ctbl); err != nil {
 		return nil, err
 	}
 
-	e.store.CreateTable(stmt.Table)
+	stbl, err := e.store.CreateTable(stmt.Table)
+	if err != nil {
+		return nil, err
+	}
+	ctbl.RootPage = stbl.Root()
+
+	if err := e.store.WriteSchema(e.cat.Marshal()); err != nil {
+		return nil, err
+	}
 	return &Result{Message: "ok"}, nil
 }
 
@@ -89,7 +125,9 @@ func (e *Engine) execInsert(stmt *ast.InsertStmt) (*Result, error) {
 			}
 			row[i] = val
 		}
-		stbl.Insert(row)
+		if _, err := stbl.Insert(row); err != nil {
+			return nil, err
+		}
 	}
 
 	return &Result{Message: fmt.Sprintf("%d rows inserted", len(stmt.Rows))}, nil

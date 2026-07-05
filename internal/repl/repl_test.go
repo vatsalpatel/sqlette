@@ -1,21 +1,26 @@
 package repl
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/vatsalpatel/sqlette/internal/assert"
+	"github.com/vatsalpatel/sqlette/internal/engine"
 )
 
-func runREPL(input string) string {
+func runREPL(t *testing.T, input string) string {
+	t.Helper()
+	eng, err := engine.Open(filepath.Join(t.TempDir(), "test.db"))
+	assert.NoError(t, err)
 	in := strings.NewReader(input)
 	var out strings.Builder
-	Run(in, &out)
+	run(in, &out, eng)
 	return out.String()
 }
 
 func TestRunCreateInsertSelect(t *testing.T) {
-	out := runREPL(
+	out := runREPL(t,
 		"CREATE TABLE users (id INT, name TEXT);\n" +
 			"INSERT INTO users VALUES (1, 'ada'), (2, 'alan');\n" +
 			"SELECT * FROM users;\n" +
@@ -30,7 +35,7 @@ func TestRunCreateInsertSelect(t *testing.T) {
 }
 
 func TestRunWhere(t *testing.T) {
-	out := runREPL(
+	out := runREPL(t,
 		"CREATE TABLE users (id INT, name TEXT, age INT);\n" +
 			"INSERT INTO users VALUES (1, 'ada', 36), (2, 'alan', 41);\n" +
 			"SELECT name FROM users WHERE age > 40;\n" +
@@ -44,6 +49,6 @@ func TestRunWhere(t *testing.T) {
 }
 
 func TestRunError(t *testing.T) {
-	out := runREPL("SELECT * FROM missing;\n.exit\n")
+	out := runREPL(t, "SELECT * FROM missing;\n.exit\n")
 	assert.Equal(t, "table missing does not exist\n", out)
 }

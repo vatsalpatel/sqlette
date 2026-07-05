@@ -202,6 +202,23 @@ func (t *Tree) splitInterior(full node, rowid int64, child pager.PageID) (int64,
 	return median.sep, right.page.ID, nil
 }
 
+func (t *Tree) MaxRowID() (int64, bool, error) {
+	n, err := t.load(t.root)
+	if err != nil {
+		return 0, false, err
+	}
+	for !n.isLeaf() {
+		n, err = t.load(n.child(n.numCells() - 1))
+		if err != nil {
+			return 0, false, err
+		}
+	}
+	if n.numCells() == 0 {
+		return 0, false, nil
+	}
+	return n.key(n.numCells() - 1), true, nil
+}
+
 type leafCell struct {
 	key int64
 	val []byte

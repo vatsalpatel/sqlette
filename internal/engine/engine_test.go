@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/vatsalpatel/sqlette/internal/assert"
@@ -9,6 +10,11 @@ import (
 	"github.com/vatsalpatel/sqlette/internal/parser"
 	"github.com/vatsalpatel/sqlette/internal/values"
 )
+
+func dbPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "test.db")
+}
 
 func mustExec(t *testing.T, eng *engine.Engine, sql string) *engine.Result {
 	t.Helper()
@@ -22,7 +28,7 @@ func mustExec(t *testing.T, eng *engine.Engine, sql string) *engine.Result {
 }
 
 func TestCreateInsertSelectStar(t *testing.T) {
-	eng, err := engine.New()
+	eng, err := engine.Open(dbPath(t))
 	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE users (id INT, name TEXT)")
 	mustExec(t, eng, "INSERT INTO users VALUES (1, 'ada')")
@@ -38,7 +44,7 @@ func TestCreateInsertSelectStar(t *testing.T) {
 }
 
 func TestSelectColumnSubset(t *testing.T) {
-	eng, err := engine.New()
+	eng, err := engine.Open(dbPath(t))
 	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE users (id INT, name TEXT)")
 	mustExec(t, eng, "INSERT INTO users VALUES (1, 'ada')")
@@ -52,7 +58,7 @@ func TestSelectColumnSubset(t *testing.T) {
 }
 
 func TestInsertMultipleRows(t *testing.T) {
-	eng, err := engine.New()
+	eng, err := engine.Open(dbPath(t))
 	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE t (a INT)")
 	mustExec(t, eng, "INSERT INTO t VALUES (1), (2), (3)")
@@ -62,7 +68,7 @@ func TestInsertMultipleRows(t *testing.T) {
 }
 
 func TestSelectUnknownTableErrors(t *testing.T) {
-	eng, err := engine.New()
+	eng, err := engine.Open(dbPath(t))
 	assert.NoError(t, err)
 	toks, err := lexer.Lex("SELECT * FROM nope")
 	assert.NoError(t, err)
@@ -74,7 +80,7 @@ func TestSelectUnknownTableErrors(t *testing.T) {
 }
 
 func TestSelectWhere(t *testing.T) {
-	eng, err := engine.New()
+	eng, err := engine.Open(dbPath(t))
 	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE users (id INT, name TEXT)")
 	mustExec(t, eng, "INSERT INTO users VALUES (1, 'ada')")
@@ -95,7 +101,7 @@ func TestSelectWhere(t *testing.T) {
 }
 
 func TestExplain(t *testing.T) {
-	eng, err := engine.New()
+	eng, err := engine.Open(dbPath(t))
 	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE users (id INT, name TEXT)")
 	mustExec(t, eng, "SELECT * FROM users")

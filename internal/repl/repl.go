@@ -15,6 +15,7 @@ import (
 const (
 	promptNew  = "sqlette> "
 	promptCont = "   ...> "
+	dbFile     = "sqlette.db"
 )
 
 // Run reads statements from in until EOF, parsing each completed statement and
@@ -22,14 +23,23 @@ const (
 // Prompts are shown only when in is an interactive terminal. It returns a
 // process exit code.
 func Run(in io.Reader, out io.Writer) int {
-	reader := bufio.NewReader(in)
-	interactive := isTerminal(in)
-	var scan Scanner
-	eng, err := engine.New()
+	eng, err := engine.Open(dbFile)
 	if err != nil {
 		fmt.Fprintln(out, err)
 		return 1
 	}
+	return run(in, out, eng)
+}
+
+func run(in io.Reader, out io.Writer, eng *engine.Engine) int {
+	defer func() {
+		if err := eng.Close(); err != nil {
+			fmt.Fprintln(out, err)
+		}
+	}()
+	reader := bufio.NewReader(in)
+	interactive := isTerminal(in)
+	var scan Scanner
 
 	prompt(out, &scan, interactive)
 	for {

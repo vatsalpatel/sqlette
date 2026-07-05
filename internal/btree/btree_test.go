@@ -262,3 +262,32 @@ func TestTreeRejectsOversizedRecord(t *testing.T) {
 	assert.True(t, found)
 	assert.True(t, bytes.Equal(payloadFor(2), got))
 }
+
+// Inserting into a reopened tree dirties pages that were read from disk (not
+// freshly allocated) — the path that silently mis-flushed when Get left page.ID
+// at zero. This is the gap the other reopen tests missed by only reading.
+func TestTreeInsertAfterReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+
+	p, err := pager.Open(path)
+	assert.NoError(t, err)
+	tree, err := Create(p)
+	assert.NoError(t, err)
+	insertKeys(t, tree, seqKeys(1, 150), 1500)
+	root := tree.Root()
+	assert.NoError(t, p.Close())
+
+	p2, err := pager.Open(path)
+	assert.NoError(t, err)
+	tree2 := Open(p2, root)
+	insertKeys(t, tree2, seqKeys(150, 300), 1500)
+	root = tree2.Root()
+	assert.NoError(t, p2.Close())
+
+	p3, err := pager.Open(path)
+	assert.NoError(t, err)
+	defer p3.Close()
+	tree3 := Open(p3, root)
+	verifyTree(t, tree3, seqKeys(1, 300), 1500)
+	checkBalanced(t, tree3)
+}

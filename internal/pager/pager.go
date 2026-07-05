@@ -43,6 +43,7 @@ func (p *Pager) Get(id PageID) (*Page, error) {
 		return p.cache[id], nil
 	}
 	page := new(Page)
+	page.ID = id
 	_, err := p.file.ReadAt(page.Data[:], int64(id)*int64(PageSize))
 	if err != nil {
 		return nil, err
