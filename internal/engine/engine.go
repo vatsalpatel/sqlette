@@ -24,12 +24,16 @@ type Engine struct {
 	store *storage.Store
 }
 
-func New() *Engine {
+func New() (*Engine, error) {
+	store, err := storage.Open("")
+	if err != nil {
+		panic(err)
+	}
 	e := &Engine{
 		cat:   catalog.New(),
-		store: storage.New(),
+		store: store,
 	}
-	return e
+	return e, nil
 }
 
 func (e *Engine) Exec(stmt ast.Statement) (*Result, error) {

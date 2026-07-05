@@ -11,7 +11,8 @@ import (
 // users: (1,ada,36) (2,alan,41) (3,grace,28) (4,bob,NULL)
 func usersEngine(t *testing.T) *engine.Engine {
 	t.Helper()
-	eng := engine.New()
+	eng, err := engine.New()
+	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE users (id INT, name TEXT, age INT)")
 	mustExec(t, eng, "INSERT INTO users VALUES (1, 'ada', 36)")
 	mustExec(t, eng, "INSERT INTO users VALUES (2, 'alan', 41)")

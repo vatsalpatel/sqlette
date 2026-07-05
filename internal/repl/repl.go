@@ -25,7 +25,11 @@ func Run(in io.Reader, out io.Writer) int {
 	reader := bufio.NewReader(in)
 	interactive := isTerminal(in)
 	var scan Scanner
-	eng := engine.New()
+	eng, err := engine.New()
+	if err != nil {
+		fmt.Fprintln(out, err)
+		return 1
+	}
 
 	prompt(out, &scan, interactive)
 	for {

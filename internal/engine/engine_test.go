@@ -22,7 +22,8 @@ func mustExec(t *testing.T, eng *engine.Engine, sql string) *engine.Result {
 }
 
 func TestCreateInsertSelectStar(t *testing.T) {
-	eng := engine.New()
+	eng, err := engine.New()
+	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE users (id INT, name TEXT)")
 	mustExec(t, eng, "INSERT INTO users VALUES (1, 'ada')")
 	mustExec(t, eng, "INSERT INTO users VALUES (2, 'alan')")
@@ -37,7 +38,8 @@ func TestCreateInsertSelectStar(t *testing.T) {
 }
 
 func TestSelectColumnSubset(t *testing.T) {
-	eng := engine.New()
+	eng, err := engine.New()
+	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE users (id INT, name TEXT)")
 	mustExec(t, eng, "INSERT INTO users VALUES (1, 'ada')")
 
@@ -50,7 +52,8 @@ func TestSelectColumnSubset(t *testing.T) {
 }
 
 func TestInsertMultipleRows(t *testing.T) {
-	eng := engine.New()
+	eng, err := engine.New()
+	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE t (a INT)")
 	mustExec(t, eng, "INSERT INTO t VALUES (1), (2), (3)")
 
@@ -59,7 +62,8 @@ func TestInsertMultipleRows(t *testing.T) {
 }
 
 func TestSelectUnknownTableErrors(t *testing.T) {
-	eng := engine.New()
+	eng, err := engine.New()
+	assert.NoError(t, err)
 	toks, err := lexer.Lex("SELECT * FROM nope")
 	assert.NoError(t, err)
 	stmt, err := parser.Parse(toks)
@@ -70,7 +74,8 @@ func TestSelectUnknownTableErrors(t *testing.T) {
 }
 
 func TestSelectWhere(t *testing.T) {
-	eng := engine.New()
+	eng, err := engine.New()
+	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE users (id INT, name TEXT)")
 	mustExec(t, eng, "INSERT INTO users VALUES (1, 'ada')")
 	mustExec(t, eng, "INSERT INTO users VALUES (2, 'alan')")
@@ -90,7 +95,8 @@ func TestSelectWhere(t *testing.T) {
 }
 
 func TestExplain(t *testing.T) {
-	eng := engine.New()
+	eng, err := engine.New()
+	assert.NoError(t, err)
 	mustExec(t, eng, "CREATE TABLE users (id INT, name TEXT)")
 	mustExec(t, eng, "SELECT * FROM users")
 

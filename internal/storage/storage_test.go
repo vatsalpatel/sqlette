@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/vatsalpatel/sqlette/internal/assert"
@@ -12,20 +13,41 @@ func row(vals ...values.Value) storage.Row {
 	return storage.Row(vals)
 }
 
-func TestInsertAssignsRowIDs(t *testing.T) {
-	s := storage.New()
-	tbl := s.CreateTable("users")
+func newStore(t *testing.T) *storage.Store {
+	t.Helper()
+	s, err := storage.Open(filepath.Join(t.TempDir(), "test.db"))
+	assert.NoError(t, err)
+	return s
+}
 
-	assert.Equal(t, int64(1), tbl.Insert(row(values.NewInteger(1), values.NewText("ada"))))
-	assert.Equal(t, int64(2), tbl.Insert(row(values.NewInteger(2), values.NewText("alan"))))
-	assert.Equal(t, int64(3), tbl.Insert(row(values.NewInteger(3), values.NewText("grace"))))
+func createTable(t *testing.T, s *storage.Store, name string) *storage.Table {
+	t.Helper()
+	tbl, err := s.CreateTable(name)
+	assert.NoError(t, err)
+	return tbl
+}
+
+func insert(t *testing.T, tbl *storage.Table, r storage.Row) int64 {
+	t.Helper()
+	id, err := tbl.Insert(r)
+	assert.NoError(t, err)
+	return id
+}
+
+func TestInsertAssignsRowIDs(t *testing.T) {
+	s := newStore(t)
+	tbl := createTable(t, s, "users")
+
+	assert.Equal(t, int64(1), insert(t, tbl, row(values.NewInteger(1), values.NewText("ada"))))
+	assert.Equal(t, int64(2), insert(t, tbl, row(values.NewInteger(2), values.NewText("alan"))))
+	assert.Equal(t, int64(3), insert(t, tbl, row(values.NewInteger(3), values.NewText("grace"))))
 }
 
 func TestScanWalksInsertOrder(t *testing.T) {
-	s := storage.New()
-	tbl := s.CreateTable("users")
-	tbl.Insert(row(values.NewInteger(1), values.NewText("ada")))
-	tbl.Insert(row(values.NewInteger(2), values.NewText("alan")))
+	s := newStore(t)
+	tbl := createTable(t, s, "users")
+	insert(t, tbl, row(values.NewInteger(1), values.NewText("ada")))
+	insert(t, tbl, row(values.NewInteger(2), values.NewText("alan")))
 
 	cur := tbl.Scan()
 	defer cur.Close()
@@ -41,8 +63,8 @@ func TestScanWalksInsertOrder(t *testing.T) {
 }
 
 func TestScanEmptyTable(t *testing.T) {
-	s := storage.New()
-	tbl := s.CreateTable("empty")
+	s := newStore(t)
+	tbl := createTable(t, s, "empty")
 
 	cur := tbl.Scan()
 	defer cur.Close()
@@ -51,8 +73,8 @@ func TestScanEmptyTable(t *testing.T) {
 }
 
 func TestStoreLookupReturnsSameTable(t *testing.T) {
-	s := storage.New()
-	s.CreateTable("users").Insert(row(values.NewInteger(1), values.NewText("ada")))
+	s := newStore(t)
+	insert(t, createTable(t, s, "users"), row(values.NewInteger(1), values.NewText("ada")))
 
 	tbl, ok := s.Table("users")
 	assert.True(t, ok)
@@ -65,18 +87,18 @@ func TestStoreLookupReturnsSameTable(t *testing.T) {
 }
 
 func TestStoreUnknownTable(t *testing.T) {
-	s := storage.New()
+	s := newStore(t)
 
 	_, ok := s.Table("missing")
 	assert.False(t, ok)
 }
 
 func TestStoreTablesAreIndependent(t *testing.T) {
-	s := storage.New()
-	users := s.CreateTable("users")
-	posts := s.CreateTable("posts")
+	s := newStore(t)
+	users := createTable(t, s, "users")
+	posts := createTable(t, s, "posts")
 
-	users.Insert(row(values.NewInteger(1)))
+	insert(t, users, row(values.NewInteger(1)))
 
 	cur := posts.Scan()
 	defer cur.Close()
