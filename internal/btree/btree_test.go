@@ -248,6 +248,43 @@ func TestTreeReopen(t *testing.T) {
 	checkBalanced(t, tree2)
 }
 
+// The root page id must never change, even as the tree grows several levels
+// deep. Before Stage A a root split minted a new parent page and moved t.root
+// onto it, orphaning the id the schema page persisted at CREATE time. Every
+// other test reads back via the live tree.Root(), so none of them would have
+// caught that — this one reopens using the id captured right after Create.
+func TestTreeRootStableAcrossSplits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+
+	p, err := pager.Open(path)
+	assert.NoError(t, err)
+	tree, err := Create(p)
+	assert.NoError(t, err)
+
+	rootAtCreate := tree.Root()
+
+	keys := seqKeys(1, 400)
+	for _, k := range keys {
+		assert.NoError(t, tree.Insert(k, fatPayload(k, 1500)))
+		if tree.Root() != rootAtCreate {
+			t.Fatalf("root id changed to %d after inserting %d, want stable %d", tree.Root(), k, rootAtCreate)
+		}
+	}
+
+	if h := treeHeight(t, tree); h < 2 {
+		t.Fatalf("height %d, want >= 2 so the root split more than once", h)
+	}
+	assert.NoError(t, p.Close())
+
+	p2, err := pager.Open(path)
+	assert.NoError(t, err)
+	defer p2.Close()
+
+	tree2 := Open(p2, rootAtCreate) // reopen at the id from CREATE, not a saved-off later id
+	verifyTree(t, tree2, keys, 1500)
+	checkBalanced(t, tree2)
+}
+
 func TestTreeRejectsOversizedRecord(t *testing.T) {
 	tree := newTree(t)
 

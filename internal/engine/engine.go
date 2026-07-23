@@ -51,11 +51,6 @@ func Open(path string) (*Engine, error) {
 }
 
 func (e Engine) Close() error {
-	for name, ctbl := range e.cat.Tables {
-		if stbl, ok := e.store.Table(name); ok {
-			ctbl.RootPage = stbl.Root()
-		}
-	}
 	if err := e.store.WriteSchema(e.cat.Marshal()); err != nil {
 		return err
 	}

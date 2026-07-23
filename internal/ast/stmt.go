@@ -39,16 +39,22 @@ type ColumnDef struct {
 
 type DropStmt struct{}
 type AlterStmt struct{}
+type BeginStmt struct{}
+type CommitStmt struct{}
+type RollbackStmt struct{}
 
 type ExplainStmt struct {
 	Stmt Statement
 }
 
-func (s *SelectStmt) stmtNode()  {}
-func (s *InsertStmt) stmtNode()  {}
-func (s *UpdateStmt) stmtNode()  {}
-func (s *DeleteStmt) stmtNode()  {}
-func (s *CreateStmt) stmtNode()  {}
-func (s *DropStmt) stmtNode()    {}
-func (s *AlterStmt) stmtNode()   {}
-func (s *ExplainStmt) stmtNode() {}
+func (s *SelectStmt) stmtNode()   {}
+func (s *InsertStmt) stmtNode()   {}
+func (s *UpdateStmt) stmtNode()   {}
+func (s *DeleteStmt) stmtNode()   {}
+func (s *CreateStmt) stmtNode()   {}
+func (s *DropStmt) stmtNode()     {}
+func (s *AlterStmt) stmtNode()    {}
+func (s *BeginStmt) stmtNode()    {}
+func (s *CommitStmt) stmtNode()   {}
+func (s *RollbackStmt) stmtNode() {}
+func (s *ExplainStmt) stmtNode()  {}

@@ -308,3 +308,77 @@ func TestParseCreate(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTransactionStatements(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want ast.Statement
+	}{
+		{"begin", "BEGIN", &ast.BeginStmt{}},
+		{"begin transaction", "BEGIN TRANSACTION", &ast.BeginStmt{}},
+		{"commit", "COMMIT", &ast.CommitStmt{}},
+		{"commit transaction", "COMMIT TRANSACTION", &ast.CommitStmt{}},
+		{"rollback", "ROLLBACK", &ast.RollbackStmt{}},
+		{"rollback transaction", "ROLLBACK TRANSACTION", &ast.RollbackStmt{}},
+
+		// END is a COMMIT synonym: the parser resolves the spelling so nothing
+		// downstream ever has to care which one was typed.
+		{"end", "END", &ast.CommitStmt{}},
+		{"end transaction", "END TRANSACTION", &ast.CommitStmt{}},
+
+		{"semicolon terminated", "BEGIN;", &ast.BeginStmt{}},
+		{"lowercase begin", "begin", &ast.BeginStmt{}},
+		{"lowercase commit", "commit", &ast.CommitStmt{}},
+		{"lowercase rollback", "rollback", &ast.RollbackStmt{}},
+		{"lowercase end", "end", &ast.CommitStmt{}},
+		{"mixed case with noise word", "BeGiN tRaNsAcTiOn", &ast.BeginStmt{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.DeepEqual(t, tt.want, mustParse(t, tt.src))
+		})
+	}
+}
+
+// The three statements must stay distinguishable by type — this is what
+// engine.Exec will switch on in Stage H.
+func TestParseTransactionStatementTypes(t *testing.T) {
+	_, ok := mustParse(t, "BEGIN").(*ast.BeginStmt)
+	assert.True(t, ok)
+
+	_, ok = mustParse(t, "COMMIT").(*ast.CommitStmt)
+	assert.True(t, ok)
+
+	_, ok = mustParse(t, "END").(*ast.CommitStmt)
+	assert.True(t, ok)
+
+	_, ok = mustParse(t, "ROLLBACK").(*ast.RollbackStmt)
+	assert.True(t, ok)
+}
+
+// Transaction syntax we deliberately do not support must fail loudly rather
+// than parse and silently ignore the modifier: BEGIN's isolation modes (we are
+// single-writer with no lock modes) and savepoints.
+func TestParseUnsupportedTransactionSyntax(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"begin deferred", "BEGIN DEFERRED", "after statement"},
+		{"begin immediate", "BEGIN IMMEDIATE", "after statement"},
+		{"begin exclusive", "BEGIN EXCLUSIVE TRANSACTION", "after statement"},
+		{"rollback to savepoint", "ROLLBACK TO SAVEPOINT sp", "after statement"},
+		{"commit with junk", "COMMIT TABLE", "after statement"},
+		{"transaction alone", "TRANSACTION", "expected a statement"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toks, err := lexer.Lex(tt.src)
+			assert.NoError(t, err)
+			_, err = parser.Parse(toks)
+			assert.ErrorContains(t, err, tt.want)
+		})
+	}
+}

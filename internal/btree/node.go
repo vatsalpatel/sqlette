@@ -57,7 +57,6 @@ func initLeaf(p *pager.Page) node {
 	p.Data[offType] = leafType
 	n.setContentStart(pager.PageSize)
 	n.setNumCells(0)
-	p.MarkDirty()
 	return n
 }
 
@@ -67,7 +66,6 @@ func initInterior(p *pager.Page, leftmost pager.PageID) node {
 	n.setContentStart(pager.PageSize)
 	n.setExtra(leftmost)
 	n.setNumCells(0)
-	p.MarkDirty()
 	return n
 }
 
@@ -102,7 +100,6 @@ func (n node) rightSibling() pager.PageID {
 
 func (n node) setRightSibling(id pager.PageID) {
 	n.setExtra(id)
-	n.page.MarkDirty()
 }
 
 func (n node) leftmostChild() pager.PageID {
@@ -157,7 +154,6 @@ func (n node) insertLeaf(rowid int64, payload []byte) bool {
 	n.setCellOffset(i, off)
 	n.setNumCells(c + 1)
 
-	n.page.MarkDirty()
 	return true
 }
 
@@ -179,6 +175,5 @@ func (n node) insertInterior(separator int64, child pager.PageID) bool {
 	n.setCellOffset(i, off)
 	n.setNumCells(c + 1)
 
-	n.page.MarkDirty()
 	return true
 }

@@ -56,10 +56,14 @@ func (j *Journal) Delete() error {
 	if err := j.file.Close(); err != nil {
 		return err
 	}
-	if err := os.Remove(j.path); err != nil {
+	return Remove(j.path)
+}
+
+func Remove(path string) error {
+	if err := os.Remove(path); err != nil {
 		return err
 	}
-	return syncDir(filepath.Dir(j.path))
+	return syncDir(filepath.Dir(path))
 }
 
 func syncDir(dir string) error {

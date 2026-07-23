@@ -2,10 +2,13 @@ package pager
 
 import (
 	"os"
+
+	"github.com/vatsalpatel/sqlette/internal/journal"
 )
 
 const (
-	PageSize = 4096
+	PageSize      = 4096
+	journalSuffix = "-journal"
 )
 
 type PageID uint32
@@ -17,9 +20,13 @@ type Page struct {
 }
 
 type Pager struct {
-	file  *os.File
-	cache map[PageID]*Page
-	Count PageID
+	file       *os.File
+	cache      map[PageID]*Page
+	Count      PageID
+	path       string
+	journal    *journal.Journal
+	inTxn      bool
+	startCount PageID
 }
 
 func Open(path string) (*Pager, error) {
@@ -27,15 +34,33 @@ func Open(path string) (*Pager, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	jpath := path + journalSuffix
+	if _, err := os.Stat(jpath); err == nil {
+		if _, err := journal.Replay(jpath, file); err != nil {
+			return nil, err
+		}
+		if err := journal.Remove(jpath); err != nil {
+			return nil, err
+		}
+	}
+
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
 	}
-	return &Pager{
+	pager := &Pager{
 		file:  file,
 		cache: make(map[PageID]*Page),
 		Count: PageID(info.Size() / int64(PageSize)),
-	}, nil
+		path:  path,
+	}
+	if pager.Count == 0 {
+		if _, err := pager.Allocate(); err != nil {
+			return nil, err
+		}
+	}
+	return pager, nil
 }
 
 func (p *Pager) Get(id PageID) (*Page, error) {
@@ -53,15 +78,30 @@ func (p *Pager) Get(id PageID) (*Page, error) {
 }
 
 func (p *Pager) Allocate() (*Page, error) {
-	p.Count++
-	page := new(Page)
-	page.ID = p.Count
-	_, err := p.file.WriteAt(page.Data[:], int64(page.ID)*int64(PageSize))
-	if err != nil {
-		return nil, err
-	}
+	page := &Page{ID: p.Count, dirty: true}
 	p.cache[page.ID] = page
+	p.Count++
 	return page, nil
+}
+
+func (p *Pager) Write(page *Page) error {
+	if page.dirty {
+		return nil // already captured this txn (or freshly allocated → born dirty)
+	}
+	if p.inTxn && page.ID < p.startCount {
+		if p.journal == nil {
+			j, err := journal.Create(p.path+journalSuffix, uint32(p.startCount), PageSize)
+			if err != nil {
+				return err
+			}
+			p.journal = j
+		}
+		if err := p.journal.Append(uint32(page.ID), page.Data[:]); err != nil {
+			return err
+		}
+	}
+	page.dirty = true
+	return nil
 }
 
 func (p *Pager) Flush() error {
@@ -74,11 +114,10 @@ func (p *Pager) Flush() error {
 			page.dirty = false
 		}
 	}
-	err := p.file.Sync()
-	if err != nil {
+	if err := p.file.Truncate(int64(p.Count) * int64(PageSize)); err != nil {
 		return err
 	}
-	return nil
+	return p.file.Sync()
 }
 
 func (p *Pager) Close() error {
@@ -89,6 +128,49 @@ func (p *Pager) Close() error {
 	return p.file.Close()
 }
 
-func (p *Page) MarkDirty() {
-	p.dirty = true
+func (p *Pager) Begin() error {
+	p.inTxn = true
+	p.startCount = p.Count
+	return nil
+}
+
+func (p *Pager) Commit() error {
+	if p.journal != nil {
+		if err := p.journal.Sync(); err != nil { // 1. pre-images durable FIRST
+			return err
+		}
+	}
+	if err := p.Flush(); err != nil { // 2. write dirty pages, truncate, fsync db
+		return err
+	}
+	if p.journal != nil {
+		if err := p.journal.Delete(); err != nil { // 3. THE commit point
+			return err
+		}
+		p.journal = nil
+	}
+	p.inTxn = false
+	return nil
+}
+
+func (p *Pager) Rollback() error {
+	if p.journal != nil {
+		dbPages, err := journal.Replay(p.path+journalSuffix, p.file)
+		if err != nil {
+			return err
+		}
+		if err := p.journal.Delete(); err != nil {
+			return err
+		}
+		p.journal = nil
+		p.Count = PageID(dbPages)
+	} else {
+		p.Count = p.startCount
+		if err := p.file.Truncate(int64(p.Count) * int64(PageSize)); err != nil {
+			return err
+		}
+	}
+	clear(p.cache)
+	p.inTxn = false
+	return nil
 }

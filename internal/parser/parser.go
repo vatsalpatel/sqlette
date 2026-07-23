@@ -49,6 +49,12 @@ func (p *parser) parseStmt() (ast.Statement, error) {
 		return p.parseCreate()
 	case token.EXPLAIN:
 		return p.parseExplain()
+	case token.BEGIN:
+		return p.parseTxn(&ast.BeginStmt{})
+	case token.COMMIT, token.END:
+		return p.parseTxn(&ast.CommitStmt{})
+	case token.ROLLBACK:
+		return p.parseTxn(&ast.RollbackStmt{})
 	default:
 		return nil, Error{Pos: peek.Pos, Msg: fmt.Sprintf("expected a statement, got %s", peek)}
 	}
@@ -416,4 +422,10 @@ func (p *parser) expect(k token.Kind) (token.Token, error) {
 	}
 	got := p.peek()
 	return got, Error{Pos: got.Pos, Msg: fmt.Sprintf("expected %s, got %s", k, got)}
+}
+
+func (p *parser) parseTxn(stmt ast.Statement) (ast.Statement, error) {
+	p.advance()
+	p.accept(token.TRANSACTION)
+	return stmt, nil
 }

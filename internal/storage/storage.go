@@ -51,7 +51,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{pager: p, tables: make(map[string]*Table)}
-	if p.Count == 0 {
+	if p.Count <= schemaPage {
 		if _, err := p.Allocate(); err != nil {
 			return nil, err
 		}
@@ -70,7 +70,7 @@ func (s *Store) CreateTable(name string) (*Table, error) {
 	}
 	t := &Table{tree: tree}
 	s.tables[name] = t
-	return t, s.pager.Flush()
+	return t, nil
 }
 
 func (s *Store) Table(name string) (*Table, bool) {
@@ -95,10 +95,12 @@ func (s *Store) WriteSchema(buf []byte) error {
 	if err != nil {
 		return err
 	}
+	if err := s.pager.Write(p); err != nil {
+		return err
+	}
 	clear(p.Data[:])
 	copy(p.Data[:], buf)
-	p.MarkDirty()
-	return s.pager.Flush()
+	return nil
 }
 
 func (s *Store) AttachTable(name string, root pager.PageID) error {

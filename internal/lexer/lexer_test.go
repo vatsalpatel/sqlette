@@ -361,3 +361,74 @@ func assertStream(t *testing.T, got, want []token.Token) {
 		assert.Equal(t, want[i].Lexeme, got[i].Lexeme)
 	}
 }
+
+func TestLexTransactionStatements(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []token.Token
+	}{
+		{"begin", "BEGIN", []token.Token{tok(token.BEGIN, "BEGIN")}},
+		{"begin transaction", "BEGIN TRANSACTION", []token.Token{
+			tok(token.BEGIN, "BEGIN"), tok(token.TRANSACTION, "TRANSACTION"),
+		}},
+		{"commit", "COMMIT", []token.Token{tok(token.COMMIT, "COMMIT")}},
+		{"commit transaction", "COMMIT TRANSACTION", []token.Token{
+			tok(token.COMMIT, "COMMIT"), tok(token.TRANSACTION, "TRANSACTION"),
+		}},
+		{"end", "END", []token.Token{tok(token.END, "END")}},
+		{"end transaction", "END TRANSACTION", []token.Token{
+			tok(token.END, "END"), tok(token.TRANSACTION, "TRANSACTION"),
+		}},
+		{"rollback", "ROLLBACK", []token.Token{tok(token.ROLLBACK, "ROLLBACK")}},
+		{"rollback transaction", "ROLLBACK TRANSACTION", []token.Token{
+			tok(token.ROLLBACK, "ROLLBACK"), tok(token.TRANSACTION, "TRANSACTION"),
+		}},
+		{"statement terminated", "BEGIN;", []token.Token{
+			tok(token.BEGIN, "BEGIN"), tok(token.SEMICOLON, ";"),
+		}},
+		{"lowercase", "begin", []token.Token{tok(token.BEGIN, "begin")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertTokens(t, tt.src, tt.want...)
+		})
+	}
+}
+
+func TestLexTransactionKeywordsCaseInsensitive(t *testing.T) {
+	tests := []struct {
+		src  string
+		kind token.Kind
+	}{
+		{"BEGIN", token.BEGIN}, {"begin", token.BEGIN}, {"BeGiN", token.BEGIN},
+		{"COMMIT", token.COMMIT}, {"commit", token.COMMIT},
+		{"ROLLBACK", token.ROLLBACK}, {"rollback", token.ROLLBACK},
+		{"TRANSACTION", token.TRANSACTION}, {"transaction", token.TRANSACTION},
+		{"END", token.END}, {"end", token.END},
+	}
+	for _, tt := range tests {
+		t.Run(tt.src, func(t *testing.T) {
+			assertTokens(t, tt.src, tok(tt.kind, tt.src))
+		})
+	}
+}
+
+// The new keywords are reserved, so they no longer lex as bare identifiers.
+// Quoting is the escape hatch: Lookup is only applied to bare words, so a
+// column really named "end" stays reachable.
+func TestLexQuotedTransactionKeywordsStayIdentifiers(t *testing.T) {
+	assertTokens(t, `"end"`, tok(token.IDENT, "end"))
+	assertTokens(t, `"begin"`, tok(token.IDENT, "begin"))
+	assertTokens(t, `SELECT "end" FROM "transaction"`, []token.Token{
+		tok(token.SELECT, "SELECT"), tok(token.IDENT, "end"),
+		tok(token.FROM, "FROM"), tok(token.IDENT, "transaction"),
+	}...)
+}
+
+// Words that merely start with a keyword must not be split or reclassified.
+func TestLexIdentifiersResemblingTransactionKeywords(t *testing.T) {
+	assertTokens(t, "beginning", tok(token.IDENT, "beginning"))
+	assertTokens(t, "committed", tok(token.IDENT, "committed"))
+	assertTokens(t, "ending", tok(token.IDENT, "ending"))
+}

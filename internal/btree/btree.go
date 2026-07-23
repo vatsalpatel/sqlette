@@ -44,7 +44,6 @@ func (t *Tree) newLeaf() (node, error) {
 	if err != nil {
 		return node{}, err
 	}
-	p.MarkDirty()
 	return initLeaf(p), nil
 }
 
@@ -53,7 +52,6 @@ func (t *Tree) newInterior(leftmost pager.PageID) (node, error) {
 	if err != nil {
 		return node{}, err
 	}
-	p.MarkDirty()
 	return initInterior(p, leftmost), nil
 }
 
@@ -92,12 +90,7 @@ func (t *Tree) Insert(rowid int64, payload []byte) error {
 		return err
 	}
 	if split {
-		root, err := t.newInterior(t.root)
-		if err != nil {
-			return err
-		}
-		root.insertInterior(sep, right)
-		t.root = root.page.ID
+		return t.growRoot(sep, right)
 	}
 	return nil
 }
@@ -108,6 +101,9 @@ func (t *Tree) insert(id pager.PageID, rowid int64, payload []byte) (split bool,
 		return false, 0, 0, err
 	}
 	if n.isLeaf() {
+		if err := t.pager.Write(n.page); err != nil {
+			return false, 0, 0, err
+		}
 		if n.insertLeaf(rowid, payload) {
 			return false, 0, 0, nil
 		}
@@ -120,6 +116,9 @@ func (t *Tree) insert(id pager.PageID, rowid int64, payload []byte) (split bool,
 
 	childSplit, sep, right, err := t.insert(n.childPage(rowid), rowid, payload)
 	if err != nil || !childSplit {
+		return false, 0, 0, err
+	}
+	if err := t.pager.Write(n.page); err != nil {
 		return false, 0, 0, err
 	}
 	if n.insertInterior(sep, right) {
@@ -200,6 +199,26 @@ func (t *Tree) splitInterior(full node, rowid int64, child pager.PageID) (int64,
 	}
 
 	return median.sep, right.page.ID, nil
+}
+
+func (t *Tree) growRoot(sep int64, right pager.PageID) error {
+	root, err := t.load(t.root)
+	if err != nil {
+		return err
+	}
+
+	left, err := t.pager.Allocate()
+	if err != nil {
+		return err
+	}
+	left.Data = root.page.Data
+
+	if err := t.pager.Write(root.page); err != nil {
+		return err
+	}
+	newRoot := initInterior(root.page, left.ID)
+	newRoot.insertInterior(sep, right)
+	return nil
 }
 
 func (t *Tree) MaxRowID() (int64, bool, error) {
