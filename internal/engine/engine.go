@@ -23,6 +23,7 @@ type Result struct {
 type Engine struct {
 	cat   *catalog.Catalog
 	store *storage.Store
+	inTxn bool
 }
 
 func New() (*Engine, error) {
@@ -34,30 +35,74 @@ func Open(path string) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	cat := catalog.New()
-	blob, err := store.ReadSchema()
-	if err != nil {
+	e := &Engine{store: store}
+	if err := e.reload(); err != nil {
 		return nil, err
 	}
-	if err := cat.Unmarshal(blob); err != nil {
-		return nil, err
-	}
-	for name, tbl := range cat.Tables {
-		if err := store.AttachTable(name, tbl.RootPage); err != nil {
-			return nil, err
-		}
-	}
-	return &Engine{cat: cat, store: store}, nil
+	return e, nil
 }
 
-func (e Engine) Close() error {
-	if err := e.store.WriteSchema(e.cat.Marshal()); err != nil {
+// reload rebuilds the in-memory catalog and table map from the schema on disk.
+// It is both the open path and the undo for in-memory state after a rollback.
+func (e *Engine) reload() error {
+	blob, err := e.store.ReadSchema()
+	if err != nil {
 		return err
+	}
+	e.cat = catalog.New()
+	if err := e.cat.Unmarshal(blob); err != nil {
+		return err
+	}
+	for name, tbl := range e.cat.Tables {
+		if err := e.store.AttachTable(name, tbl.RootPage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) Close() error {
+	if e.inTxn {
+		if err := e.store.Rollback(); err != nil {
+			return err
+		}
+		e.inTxn = false
 	}
 	return e.store.Close()
 }
 
 func (e *Engine) Exec(stmt ast.Statement) (*Result, error) {
+	switch stmt.(type) {
+	case *ast.BeginStmt:
+		return e.begin()
+	case *ast.CommitStmt:
+		return e.commit()
+	case *ast.RollbackStmt:
+		return e.rollback()
+	}
+
+	if e.inTxn {
+		return e.dispatch(stmt) // inside an explicit transaction; COMMIT will flush
+	}
+
+	// autocommit: wrap the statement in its own transaction
+	if err := e.store.Begin(); err != nil {
+		return nil, err
+	}
+	res, err := e.dispatch(stmt)
+	if err != nil {
+		if rbErr := e.rollbackState(); rbErr != nil {
+			return nil, rbErr
+		}
+		return nil, err
+	}
+	if err := e.store.Commit(); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (e *Engine) dispatch(stmt ast.Statement) (*Result, error) {
 	switch st := stmt.(type) {
 	case *ast.CreateStmt:
 		return e.execCreate(st)
@@ -70,6 +115,48 @@ func (e *Engine) Exec(stmt ast.Statement) (*Result, error) {
 	default:
 		return nil, fmt.Errorf("unknown statement type %T", stmt)
 	}
+}
+
+func (e *Engine) begin() (*Result, error) {
+	if e.inTxn {
+		return nil, fmt.Errorf("cannot start a transaction within a transaction")
+	}
+	if err := e.store.Begin(); err != nil {
+		return nil, err
+	}
+	e.inTxn = true
+	return &Result{Message: "ok"}, nil
+}
+
+func (e *Engine) commit() (*Result, error) {
+	if !e.inTxn {
+		return nil, fmt.Errorf("no transaction is active")
+	}
+	if err := e.store.Commit(); err != nil {
+		return nil, err
+	}
+	e.inTxn = false
+	return &Result{Message: "ok"}, nil
+}
+
+func (e *Engine) rollback() (*Result, error) {
+	if !e.inTxn {
+		return nil, fmt.Errorf("no transaction is active")
+	}
+	if err := e.rollbackState(); err != nil {
+		return nil, err
+	}
+	e.inTxn = false
+	return &Result{Message: "ok"}, nil
+}
+
+// rollbackState undoes both halves of a transaction: the pager restores the
+// pages, then reload() rebuilds the catalog and table map from them.
+func (e *Engine) rollbackState() error {
+	if err := e.store.Rollback(); err != nil {
+		return err
+	}
+	return e.reload()
 }
 
 func (e *Engine) execCreate(stmt *ast.CreateStmt) (*Result, error) {

@@ -117,6 +117,17 @@ func (s *Store) AttachTable(name string, root pager.PageID) error {
 	return nil
 }
 
+func (s *Store) Begin() error  { return s.pager.Begin() }
+func (s *Store) Commit() error { return s.pager.Commit() }
+
+func (s *Store) Rollback() error {
+	if err := s.pager.Rollback(); err != nil {
+		return err
+	}
+	clear(s.tables) // the engine's reload() rebuilds this from the restored schema
+	return nil
+}
+
 func (s *Store) Close() error {
 	return s.pager.Close()
 }
