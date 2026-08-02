@@ -177,3 +177,19 @@ func (n node) insertInterior(separator int64, child pager.PageID) bool {
 
 	return true
 }
+
+func (n node) deleteLeaf(i int) {
+	sib := n.rightSibling()
+	var cells []leafCell
+	for j := 0; j < n.numCells(); j++ {
+		if j != i {
+			cells = append(cells, leafCell{n.key(j), append([]byte(nil), n.payload(j)...)})
+		}
+	}
+
+	initLeaf(n.page)
+	n.setRightSibling(sib)
+	for _, c := range cells {
+		n.insertLeaf(c.key, c.val)
+	}
+}

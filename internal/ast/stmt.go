@@ -22,8 +22,16 @@ type InsertStmt struct {
 	Rows    [][]Expression
 }
 
-type UpdateStmt struct{}
-type DeleteStmt struct{}
+type UpdateStmt struct {
+	Assigns []Assign
+	Table   string
+	Where   Expression
+}
+
+type DeleteStmt struct {
+	Table string
+	Where Expression
+}
 
 type CreateStmt struct {
 	Table   string
@@ -35,6 +43,11 @@ type ColumnDef struct {
 	Type       string
 	PrimaryKey bool
 	NotNull    bool
+}
+
+type Assign struct {
+	Column string
+	Value  Expression
 }
 
 type DropStmt struct{}

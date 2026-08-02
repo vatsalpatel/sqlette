@@ -45,6 +45,10 @@ func (p *parser) parseStmt() (ast.Statement, error) {
 		return p.parseSelect()
 	case token.INSERT:
 		return p.parseInsert()
+	case token.UPDATE:
+		return p.parseUpdate()
+	case token.DELETE:
+		return p.parseDelete()
 	case token.CREATE:
 		return p.parseCreate()
 	case token.EXPLAIN:
@@ -309,6 +313,70 @@ func (p *parser) parseRow() ([]ast.Expression, error) {
 		return nil, err
 	}
 	return exprs, nil
+}
+
+func (p *parser) parseUpdate() (ast.Statement, error) {
+	p.advance() // skip UPDATE
+	stmt := &ast.UpdateStmt{}
+	tbl, err := p.expect(token.IDENT)
+	if err != nil {
+		return nil, err
+	}
+	stmt.Table = tbl.Lexeme
+
+	if _, err := p.expect(token.SET); err != nil {
+		return nil, err
+	}
+	for {
+		col, err := p.expect(token.IDENT)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(token.EQ); err != nil {
+			return nil, err
+		}
+		expr, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		stmt.Assigns = append(stmt.Assigns, ast.Assign{Column: col.Lexeme, Value: expr})
+		if !p.accept(token.COMMA) {
+			break
+		}
+	}
+
+	if p.accept(token.WHERE) {
+		where, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		stmt.Where = where
+	}
+
+	return stmt, nil
+}
+
+func (p *parser) parseDelete() (ast.Statement, error) {
+	p.advance() // skip DELETE
+	stmt := &ast.DeleteStmt{}
+	if _, err := p.expect(token.FROM); err != nil {
+		return nil, err
+	}
+	tbl, err := p.expect(token.IDENT)
+	if err != nil {
+		return nil, err
+	}
+	stmt.Table = tbl.Lexeme
+
+	if p.accept(token.WHERE) {
+		where, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		stmt.Where = where
+	}
+
+	return stmt, nil
 }
 
 func (p *parser) parseCreate() (ast.Statement, error) {

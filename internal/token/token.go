@@ -26,6 +26,9 @@ const (
 	INSERT
 	INTO
 	VALUES
+	UPDATE
+	SET
+	DELETE
 	CREATE
 	TABLE
 	AND
@@ -93,6 +96,9 @@ var keywords = map[string]Kind{
 	"INSERT":      INSERT,
 	"INTO":        INTO,
 	"VALUES":      VALUES,
+	"UPDATE":      UPDATE,
+	"SET":         SET,
+	"DELETE":      DELETE,
 	"CREATE":      CREATE,
 	"TABLE":       TABLE,
 	"AND":         AND,
@@ -139,6 +145,9 @@ var kindNames = map[Kind]string{
 	INSERT:      "INSERT",
 	INTO:        "INTO",
 	VALUES:      "VALUES",
+	UPDATE:      "UPDATE",
+	SET:         "SET",
+	DELETE:      "DELETE",
 	CREATE:      "CREATE",
 	TABLE:       "TABLE",
 	AND:         "AND",

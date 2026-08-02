@@ -357,6 +357,138 @@ func TestParseTransactionStatementTypes(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestParseUpdate(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want *ast.UpdateStmt
+	}{
+		{"single assignment", "UPDATE t SET a = 1", &ast.UpdateStmt{
+			Table:   "t",
+			Assigns: []ast.Assign{{Column: "a", Value: intLit("1")}},
+		}},
+		{"string value", "UPDATE users SET name = 'bob'", &ast.UpdateStmt{
+			Table:   "users",
+			Assigns: []ast.Assign{{Column: "name", Value: lit(token.STRING, "bob")}},
+		}},
+		{"multiple assignments", "UPDATE t SET a = 1, b = 2", &ast.UpdateStmt{
+			Table: "t",
+			Assigns: []ast.Assign{
+				{Column: "a", Value: intLit("1")},
+				{Column: "b", Value: intLit("2")},
+			},
+		}},
+		{"with where", "UPDATE users SET name = 'bob' WHERE id = 1", &ast.UpdateStmt{
+			Table:   "users",
+			Assigns: []ast.Assign{{Column: "name", Value: lit(token.STRING, "bob")}},
+			Where:   bin(token.EQ, col("id"), intLit("1")),
+		}},
+		{"expression rhs", "UPDATE t SET n = n + 1 WHERE n > 0", &ast.UpdateStmt{
+			Table:   "t",
+			Assigns: []ast.Assign{{Column: "n", Value: bin(token.PLUS, col("n"), intLit("1"))}},
+			Where:   bin(token.GT, col("n"), intLit("0")),
+		}},
+		// RHS values read the pre-update row, so the parser must preserve
+		// assignment order for the executor to evaluate a swap correctly.
+		{"swap preserves order", "UPDATE t SET a = b, b = a", &ast.UpdateStmt{
+			Table: "t",
+			Assigns: []ast.Assign{
+				{Column: "a", Value: col("b")},
+				{Column: "b", Value: col("a")},
+			},
+		}},
+		{"lowercase keywords", "update t set a = 1", &ast.UpdateStmt{
+			Table:   "t",
+			Assigns: []ast.Assign{{Column: "a", Value: intLit("1")}},
+		}},
+		{"semicolon terminated", "UPDATE t SET a = 1;", &ast.UpdateStmt{
+			Table:   "t",
+			Assigns: []ast.Assign{{Column: "a", Value: intLit("1")}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.DeepEqual(t, tt.want, mustParse(t, tt.src))
+		})
+	}
+}
+
+// UPDATE requires a SET clause and an '=' per assignment. A bare table or a
+// column with no value must fail loudly rather than parse to a no-op update.
+func TestParseUpdateErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"missing table", "UPDATE SET a = 1", "expected IDENT"},
+		{"missing set", "UPDATE t", "expected SET"},
+		{"assignment missing equals", "UPDATE t SET a", "expected EQ"},
+		{"assignment missing value", "UPDATE t SET a =", "expected an expression"},
+		{"trailing comma", "UPDATE t SET a = 1,", "expected IDENT"},
+		{"where without predicate", "UPDATE t SET a = 1 WHERE", "expected an expression"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toks, err := lexer.Lex(tt.src)
+			assert.NoError(t, err)
+			_, err = parser.Parse(toks)
+			assert.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
+func TestParseDelete(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want *ast.DeleteStmt
+	}{
+		{"all rows", "DELETE FROM t", &ast.DeleteStmt{Table: "t"}},
+		{"with where", "DELETE FROM users WHERE id = 1", &ast.DeleteStmt{
+			Table: "users",
+			Where: bin(token.EQ, col("id"), intLit("1")),
+		}},
+		{"compound where", "DELETE FROM t WHERE a > 1 AND b < 2", &ast.DeleteStmt{
+			Table: "t",
+			Where: bin(token.AND,
+				bin(token.GT, col("a"), intLit("1")),
+				bin(token.LT, col("b"), intLit("2"))),
+		}},
+		{"lowercase keywords", "delete from t", &ast.DeleteStmt{Table: "t"}},
+		{"semicolon terminated", "DELETE FROM t;", &ast.DeleteStmt{Table: "t"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.DeepEqual(t, tt.want, mustParse(t, tt.src))
+		})
+	}
+}
+
+// DELETE requires FROM and a table name; the WHERE predicate, when present,
+// must be a real expression. A bare DELETE or a missing table must fail loudly.
+func TestParseDeleteErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"missing from", "DELETE t", "expected FROM"},
+		{"missing table", "DELETE FROM", "expected IDENT"},
+		{"missing table before where", "DELETE FROM WHERE id = 1", "expected IDENT"},
+		{"where without predicate", "DELETE FROM t WHERE", "expected an expression"},
+		{"trailing tokens", "DELETE FROM t junk", "after statement"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toks, err := lexer.Lex(tt.src)
+			assert.NoError(t, err)
+			_, err = parser.Parse(toks)
+			assert.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
 // Transaction syntax we deliberately do not support must fail loudly rather
 // than parse and silently ignore the modifier: BEGIN's isolation modes (we are
 // single-writer with no lock modes) and savepoints.

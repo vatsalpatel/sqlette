@@ -328,3 +328,245 @@ func TestTreeInsertAfterReopen(t *testing.T) {
 	verifyTree(t, tree3, seqKeys(1, 300), 1500)
 	checkBalanced(t, tree3)
 }
+
+// --- Stage A: delete ---
+
+func TestTreeDeleteFromLeaf(t *testing.T) {
+	tree := newTree(t)
+	insertKeys(t, tree, []int64{10, 20, 30, 40, 50}, 50)
+
+	ok, err := tree.Delete(30)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	_, found, err := tree.Get(30)
+	assert.NoError(t, err)
+	assert.False(t, found)
+
+	verifyTree(t, tree, []int64{10, 20, 40, 50}, 50)
+}
+
+// Deleting a rowid that isn't present is a pure no-op: no error, false, and the
+// tree is untouched. (At the engine level this is what keeps a DELETE matching
+// nothing from dirtying a page or opening a journal.)
+func TestTreeDeleteNotFound(t *testing.T) {
+	tree := newTree(t)
+	insertKeys(t, tree, seqKeys(1, 5), 50)
+
+	ok, err := tree.Delete(999)
+	assert.NoError(t, err)
+	assert.False(t, ok)
+
+	verifyTree(t, tree, seqKeys(1, 5), 50)
+}
+
+// Fat payloads force a multi-level tree; deleting a scattered subset exercises
+// interior routing to the right leaf plus the leaf-level reclaim.
+func TestTreeDeleteAcrossLeaves(t *testing.T) {
+	tree := newTree(t)
+	keys := seqKeys(1, 60)
+	insertKeys(t, tree, keys, 1500)
+
+	var remaining []int64
+	for _, k := range keys {
+		if k%3 == 0 {
+			ok, err := tree.Delete(k)
+			assert.NoError(t, err)
+			assert.True(t, ok)
+		} else {
+			remaining = append(remaining, k)
+		}
+	}
+
+	verifyTree(t, tree, remaining, 1500)
+}
+
+// Emptying the leftmost leaves leaves 0-cell leaves at the front of the sibling
+// chain, where the cursor starts. The scan must step over them — this is the
+// case the single-step Cursor.Next (an `if`, not a `for`) silently truncated.
+func TestTreeDeleteEmptiesLeafScanSkips(t *testing.T) {
+	tree := newTree(t)
+	insertKeys(t, tree, seqKeys(1, 20), 1500)
+
+	for k := int64(1); k <= 10; k++ {
+		ok, err := tree.Delete(k)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	}
+
+	verifyTree(t, tree, seqKeys(11, 20), 1500)
+}
+
+func TestTreeDeleteAll(t *testing.T) {
+	tree := newTree(t)
+	keys := seqKeys(1, 40)
+	insertKeys(t, tree, keys, 1500)
+
+	for _, k := range keys {
+		ok, err := tree.Delete(k)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	}
+
+	for _, k := range keys {
+		_, found, err := tree.Get(k)
+		assert.NoError(t, err)
+		assert.False(t, found)
+	}
+
+	c := tree.Cursor()
+	defer c.Close()
+	assert.False(t, c.Next())
+	assert.NoError(t, c.Err())
+}
+
+// Deleting then re-inserting every key in a multi-level tree covers the keys
+// that happen to be interior separators: a separator is a routing hint, not a
+// key, so routing must keep working with the leaf gone and after it's refilled.
+func TestTreeDeleteThenReinsert(t *testing.T) {
+	tree := newTree(t)
+	keys := seqKeys(1, 60)
+	insertKeys(t, tree, keys, 1500)
+
+	for _, k := range keys {
+		ok, err := tree.Delete(k)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+
+		_, found, err := tree.Get(k)
+		assert.NoError(t, err)
+		assert.False(t, found)
+
+		assert.NoError(t, tree.Insert(k, fatPayload(k, 1500)))
+
+		got, found, err := tree.Get(k)
+		assert.NoError(t, err)
+		assert.True(t, found)
+		assert.True(t, bytes.Equal(fatPayload(k, 1500), got))
+	}
+
+	verifyTree(t, tree, keys, 1500)
+	checkBalanced(t, tree)
+}
+
+// The reclaim tripwire: insert-then-delete the same row many times. With the
+// page repacked on delete, contentStart resets and the single leaf is reused
+// forever; without it, leaked cell bytes march contentStart down and the leaf
+// splits, growing the file. Page count must stay flat.
+func TestTreeDeleteReclaimsSpace(t *testing.T) {
+	tree := newTree(t)
+	countBefore := tree.pager.Count
+
+	for i := range int64(1000) {
+		assert.NoError(t, tree.Insert(i, fatPayload(i, 1500)))
+		ok, err := tree.Delete(i)
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	}
+
+	assert.Equal(t, countBefore, tree.pager.Count)
+}
+
+// --- Stage B: update ---
+
+func TestTreeUpdateReplacesPayload(t *testing.T) {
+	tree := newTree(t)
+	insertKeys(t, tree, seqKeys(1, 6), 100)
+
+	newVal := fatPayload(3, 500)
+	ok, err := tree.Update(3, newVal)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+
+	got, found, err := tree.Get(3)
+	assert.NoError(t, err)
+	assert.True(t, found)
+	assert.True(t, bytes.Equal(newVal, got))
+
+	for _, k := range []int64{1, 2, 4, 5} {
+		got, found, err := tree.Get(k)
+		assert.NoError(t, err)
+		assert.True(t, found)
+		assert.True(t, bytes.Equal(fatPayload(k, 100), got))
+	}
+}
+
+// Updating a rowid that isn't present must not secretly create it.
+func TestTreeUpdateNotFound(t *testing.T) {
+	tree := newTree(t)
+	insertKeys(t, tree, seqKeys(1, 5), 100)
+
+	ok, err := tree.Update(999, fatPayload(999, 100))
+	assert.NoError(t, err)
+	assert.False(t, ok)
+
+	_, found, err := tree.Get(999)
+	assert.NoError(t, err)
+	assert.False(t, found)
+
+	verifyTree(t, tree, seqKeys(1, 5), 100)
+}
+
+// A small row updated to a fat one no longer fits its leaf; the re-insert half
+// of Update must split, growing the tree a level.
+func TestTreeUpdateGrowsWithSplit(t *testing.T) {
+	tree := newTree(t)
+	keys := seqKeys(1, 5)
+	insertKeys(t, tree, keys, 50)
+	assert.Equal(t, 0, treeHeight(t, tree))
+
+	for _, k := range keys {
+		ok, err := tree.Update(k, fatPayload(k, 1500))
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	}
+
+	verifyTree(t, tree, keys, 1500)
+	checkBalanced(t, tree)
+	if h := treeHeight(t, tree); h < 1 {
+		t.Fatalf("height %d, want >= 1 after updates forced a split", h)
+	}
+}
+
+// Shrinking every payload in a multi-level tree must keep every row readable and
+// the scan ordered.
+func TestTreeUpdateShrinks(t *testing.T) {
+	tree := newTree(t)
+	keys := seqKeys(1, 40)
+	insertKeys(t, tree, keys, 1500)
+
+	for _, k := range keys {
+		ok, err := tree.Update(k, fatPayload(k, 50))
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	}
+
+	verifyTree(t, tree, keys, 50)
+}
+
+func TestTreeUpdatePersistsAcrossReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+
+	p, err := pager.Open(path)
+	assert.NoError(t, err)
+	tree, err := Create(p)
+	assert.NoError(t, err)
+
+	keys := seqKeys(1, 60)
+	insertKeys(t, tree, keys, 100)
+	for _, k := range keys {
+		ok, err := tree.Update(k, fatPayload(k, 300))
+		assert.NoError(t, err)
+		assert.True(t, ok)
+	}
+	root := tree.Root()
+	assert.NoError(t, p.Close())
+
+	p2, err := pager.Open(path)
+	assert.NoError(t, err)
+	defer p2.Close()
+
+	tree2 := Open(p2, root)
+	verifyTree(t, tree2, keys, 300)
+	checkBalanced(t, tree2)
+}

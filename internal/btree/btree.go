@@ -238,6 +238,32 @@ func (t *Tree) MaxRowID() (int64, bool, error) {
 	return n.key(n.numCells() - 1), true, nil
 }
 
+func (t *Tree) Update(rowid int64, payload []byte) (bool, error) {
+	deleted, err := t.Delete(rowid)
+	if err != nil {
+		return false, err
+	}
+	if !deleted {
+		return false, nil
+	}
+	return true, t.Insert(rowid, payload)
+}
+
+func (t *Tree) Delete(rowid int64) (bool, error) {
+	leaf, slot, found, err := t.search(rowid)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	if err := t.pager.Write(leaf.page); err != nil {
+		return false, err
+	}
+	leaf.deleteLeaf(slot)
+	return true, nil
+}
+
 type leafCell struct {
 	key int64
 	val []byte
@@ -279,7 +305,7 @@ func (c *Cursor) Next() bool {
 		return false
 	}
 	c.slot++
-	if c.slot >= c.leaf.numCells() {
+	for c.slot >= c.leaf.numCells() {
 		sib := c.leaf.rightSibling()
 		if sib == 0 {
 			return false
@@ -290,7 +316,7 @@ func (c *Cursor) Next() bool {
 		}
 		c.slot = 0
 	}
-	return c.slot < c.leaf.numCells()
+	return true
 }
 func (c *Cursor) RowID() int64 {
 	if c.err != nil {
