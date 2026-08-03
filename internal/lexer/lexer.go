@@ -23,7 +23,10 @@ func (e Error) Error() string {
 // the error, and keeps going; the returned error joins all of them,
 // so one bad token never hides the rest of the input.
 func Lex(src string) ([]token.Token, error) {
-	l := &lexer{src: src}
+	l := &lexer{
+		src:    src,
+		tokens: make([]token.Token, 0, len(src)/2+5),
+	}
 	for {
 		l.skipTrivia()
 		if l.atEnd() {
