@@ -18,6 +18,10 @@ type Operator interface {
 	Next() (storage.Row, error)
 	Close() error
 }
+type RowScanner interface {
+	Operator
+	RowID() int64
+}
 
 type seqScan struct {
 	table  *storage.Table
@@ -34,6 +38,10 @@ func (s *seqScan) Next() (storage.Row, error) {
 		return s.cursor.Row(), nil
 	}
 	return nil, io.EOF
+}
+
+func (s *seqScan) RowID() int64 {
+	return s.cursor.RowID()
 }
 
 func (s *seqScan) Close() error {
@@ -81,7 +89,7 @@ func (f *filter) Next() (storage.Row, error) {
 		if err != nil {
 			return nil, err
 		}
-		v, err := eval(f.pred, row, f.schema)
+		v, err := Eval(f.pred, row, f.schema)
 		if err != nil {
 			return nil, err
 		}
@@ -89,6 +97,10 @@ func (f *filter) Next() (storage.Row, error) {
 			return row, nil
 		}
 	}
+}
+
+func (f *filter) RowID() int64 {
+	return f.input.(RowScanner).RowID()
 }
 
 func (f *filter) Close() error {
@@ -156,7 +168,7 @@ func bindColumns(cols []ast.ResultColumn, schema *catalog.Table) ([]int, []strin
 	return indices, names, nil
 }
 
-func eval(pred ast.Expression, row storage.Row, schema *catalog.Table) (values.Value, error) {
+func Eval(pred ast.Expression, row storage.Row, schema *catalog.Table) (values.Value, error) {
 	switch pred := pred.(type) {
 	case *ast.Literal:
 		return EvalConst(pred)
@@ -169,7 +181,7 @@ func eval(pred ast.Expression, row storage.Row, schema *catalog.Table) (values.V
 	case *ast.Unary:
 		switch pred.Op {
 		case token.NOT:
-			op, err := eval(pred.Operand, row, schema)
+			op, err := Eval(pred.Operand, row, schema)
 			if err != nil {
 				return values.NewNull(), err
 			}
@@ -178,11 +190,11 @@ func eval(pred ast.Expression, row storage.Row, schema *catalog.Table) (values.V
 			return values.NewNull(), fmt.Errorf("unknown unary operator %s", pred.Op)
 		}
 	case *ast.Binary:
-		l, err := eval(pred.Left, row, schema)
+		l, err := Eval(pred.Left, row, schema)
 		if err != nil {
 			return values.NewNull(), err
 		}
-		r, err := eval(pred.Right, row, schema)
+		r, err := Eval(pred.Right, row, schema)
 		if err != nil {
 			return values.NewNull(), err
 		}

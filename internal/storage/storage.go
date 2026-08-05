@@ -29,6 +29,14 @@ func (t *Table) Insert(r Row) (int64, error) {
 	return t.nextID, nil
 }
 
+func (t *Table) Update(id int64, r Row) (bool, error) {
+	return t.tree.Update(id, record.Encode(r))
+}
+
+func (t *Table) Delete(id int64) (bool, error) {
+	return t.tree.Delete(id)
+}
+
 func (t *Table) Scan() Cursor {
 	return &btreeCursor{inner: t.tree.Cursor()}
 }

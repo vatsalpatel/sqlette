@@ -8,6 +8,7 @@ import (
 type Cursor interface {
 	Next() bool
 	Row() Row
+	RowID() int64
 	Err() error
 	Close() error
 }
@@ -24,6 +25,7 @@ func (c *heapCursor) Next() bool {
 	return c.idx < len(c.heap)
 }
 func (c *heapCursor) Row() Row     { return c.heap[c.idx] }
+func (c *heapCursor) RowID() int64 { return int64(c.idx) }
 func (c *heapCursor) Err() error   { return nil }
 func (c *heapCursor) Close() error { return nil }
 
@@ -49,5 +51,6 @@ func (c *btreeCursor) Next() bool {
 	return true
 }
 func (c *btreeCursor) Row() Row     { return c.row }
+func (c *btreeCursor) RowID() int64 { return c.inner.RowID() }
 func (c *btreeCursor) Err() error   { return c.err }
 func (c *btreeCursor) Close() error { return nil }

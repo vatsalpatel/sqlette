@@ -100,13 +100,48 @@ func TestSelectWhere(t *testing.T) {
 	}, res.Rows)
 }
 
-func TestExplain(t *testing.T) {
+func TestExplainSelect(t *testing.T) {
 	eng, err := engine.Open(dbPath(t))
 	assert.NoError(t, err)
+	defer eng.Close()
 	mustExec(t, eng, "CREATE TABLE users (id INT, name TEXT)")
-	mustExec(t, eng, "SELECT * FROM users")
 
 	res := mustExec(t, eng, "EXPLAIN SELECT * FROM users WHERE id > 1")
-	assert.Equal(t, "", res.Message)
-	// assert.Equal(t, "(select (cols id name))", res.Rows[0][0].String())
+	assert.Equal(t, "(project *)\n  (filter (> id 1))\n    (seqscan users)", res.Message)
+}
+
+func TestExplainDelete(t *testing.T) {
+	eng := usersEngine(t)
+
+	res := mustExec(t, eng, "EXPLAIN DELETE FROM users WHERE id = 2")
+	assert.Equal(t, "(delete users)\n  (filter (= id 2))\n    (seqscan users)", res.Message)
+
+	res = mustExec(t, eng, "EXPLAIN DELETE FROM users")
+	assert.Equal(t, "(delete users)\n  (seqscan users)", res.Message)
+
+	// EXPLAIN builds the plan but must not run it.
+	sel := mustExec(t, eng, "SELECT * FROM users")
+	assert.Equal(t, 4, len(sel.Rows))
+}
+
+func TestExplainUpdate(t *testing.T) {
+	eng := usersEngine(t)
+
+	res := mustExec(t, eng, "EXPLAIN UPDATE users SET age = 0 WHERE id = 1")
+	assert.Equal(t, "(update users)\n  (filter (= id 1))\n    (seqscan users)", res.Message)
+
+	res = mustExec(t, eng, "EXPLAIN UPDATE users SET age = 0")
+	assert.Equal(t, "(update users)\n  (seqscan users)", res.Message)
+
+	sel := mustExec(t, eng, "SELECT name FROM users")
+	assert.DeepEqual(t, []string{"ada", "alan", "grace", "bob"}, names(sel))
+}
+
+func TestExplainUnknownTableErrors(t *testing.T) {
+	eng, err := engine.Open(dbPath(t))
+	assert.NoError(t, err)
+	defer eng.Close()
+
+	_, err = tryExec(t, eng, "EXPLAIN SELECT * FROM nope")
+	assert.True(t, err != nil)
 }

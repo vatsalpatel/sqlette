@@ -108,6 +108,10 @@ func (e *Engine) dispatch(stmt ast.Statement) (*Result, error) {
 		return e.execCreate(st)
 	case *ast.InsertStmt:
 		return e.execInsert(st)
+	case *ast.UpdateStmt:
+		return e.execUpdate(st)
+	case *ast.DeleteStmt:
+		return e.execDelete(st)
 	case *ast.SelectStmt:
 		return e.execSelect(st)
 	case *ast.ExplainStmt:
@@ -215,6 +219,127 @@ func (e *Engine) execInsert(stmt *ast.InsertStmt) (*Result, error) {
 	return &Result{Message: fmt.Sprintf("%d rows inserted", len(stmt.Rows))}, nil
 }
 
+func (e *Engine) execUpdate(stmt *ast.UpdateStmt) (*Result, error) {
+	schema, ok := e.cat.Get(stmt.Table)
+	if !ok {
+		return nil, fmt.Errorf("table %s does not exist", stmt.Table)
+	}
+	table, ok := e.store.Table(stmt.Table)
+	if !ok {
+		return nil, fmt.Errorf("table %s does not exist", stmt.Table)
+	}
+
+	indices := make([]int, len(stmt.Assigns))
+	for i, a := range stmt.Assigns {
+		idx, ok := schema.ColumnIndex(a.Column)
+		if !ok {
+			return nil, fmt.Errorf("column %s not found", a.Column)
+		}
+		indices[i] = idx
+	}
+
+	var node plan.Node = &plan.SeqScan{Table: stmt.Table}
+	if stmt.Where != nil {
+		node = &plan.Filter{Input: node, Predicate: stmt.Where}
+	}
+	op, _, err := exec.Build(node, e.store, schema)
+	if err != nil {
+		return nil, err
+	}
+	scanner, ok := op.(exec.RowScanner)
+	if !ok {
+		return nil, fmt.Errorf("expected a row scanner, got %T", op)
+	}
+	if err := scanner.Open(); err != nil {
+		return nil, err
+	}
+
+	type pending struct {
+		id  int64
+		row []values.Value
+	}
+	var updates []pending
+	for {
+		row, err := scanner.Next()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		newRow := make([]values.Value, len(row))
+		copy(newRow, row)
+		for i, a := range stmt.Assigns {
+			val, err := exec.Eval(a.Value, row, schema)
+			if err != nil {
+				return nil, err
+			}
+			newRow[indices[i]] = val
+		}
+		updates = append(updates, pending{id: scanner.RowID(), row: newRow})
+	}
+	if err := scanner.Close(); err != nil {
+		return nil, err
+	}
+
+	for _, u := range updates {
+		if _, err := table.Update(u.id, u.row); err != nil {
+			return nil, err
+		}
+	}
+
+	return &Result{Message: fmt.Sprintf("%d rows updated", len(updates))}, nil
+}
+
+func (e *Engine) execDelete(stmt *ast.DeleteStmt) (*Result, error) {
+	schema, ok := e.cat.Get(stmt.Table)
+	if !ok {
+		return nil, fmt.Errorf("table %s does not exist", stmt.Table)
+	}
+	table, ok := e.store.Table(stmt.Table)
+	if !ok {
+		return nil, fmt.Errorf("table %s does not exist", stmt.Table)
+	}
+
+	var node plan.Node = &plan.SeqScan{Table: stmt.Table}
+	if stmt.Where != nil {
+		node = &plan.Filter{Input: node, Predicate: stmt.Where}
+	}
+	op, _, err := exec.Build(node, e.store, schema)
+	if err != nil {
+		return nil, err
+	}
+	scanner, ok := op.(exec.RowScanner)
+	if !ok {
+		return nil, fmt.Errorf("expected a row scanner, got %T", op)
+	}
+	if err := scanner.Open(); err != nil {
+		return nil, err
+	}
+	var ids []int64
+	for {
+		_, err := scanner.Next()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		ids = append(ids, scanner.RowID())
+	}
+	if err := scanner.Close(); err != nil {
+		return nil, err
+	}
+
+	for _, id := range ids {
+		if _, err := table.Delete(id); err != nil {
+			return nil, err
+		}
+	}
+
+	return &Result{Message: fmt.Sprintf("%d rows deleted", len(ids))}, nil
+}
+
 func (e *Engine) execSelect(stmt *ast.SelectStmt) (*Result, error) {
 	schema, ok := e.cat.Get(stmt.From.Name)
 	if !ok {
@@ -252,23 +377,44 @@ func (e *Engine) execSelect(stmt *ast.SelectStmt) (*Result, error) {
 }
 
 func (e *Engine) execExplain(stmt *ast.ExplainStmt) (*Result, error) {
-	selectStmt, ok := stmt.Stmt.(*ast.SelectStmt)
-	if !ok {
-		return nil, fmt.Errorf("expected a SELECT statement, got %T", stmt.Stmt)
+	node, err := e.explainPlan(stmt.Stmt)
+	if err != nil {
+		return nil, err
 	}
+	return &Result{Message: buildPlan(node, 0)}, nil
+}
 
-	table, ok := e.cat.Get(selectStmt.From.Name)
-	if !ok {
-		return nil, fmt.Errorf("table %s does not exist", selectStmt.From.Name)
+func (e *Engine) explainPlan(stmt ast.Statement) (plan.Node, error) {
+	switch st := stmt.(type) {
+	case *ast.SelectStmt:
+		schema, ok := e.cat.Get(st.From.Name)
+		if !ok {
+			return nil, fmt.Errorf("table %s does not exist", st.From.Name)
+		}
+		return &plan.Project{Input: scanNode(schema.Name, st.Where), Columns: st.Columns}, nil
+	case *ast.DeleteStmt:
+		schema, ok := e.cat.Get(st.Table)
+		if !ok {
+			return nil, fmt.Errorf("table %s does not exist", st.Table)
+		}
+		return &plan.Delete{Input: scanNode(schema.Name, st.Where), Table: schema.Name}, nil
+	case *ast.UpdateStmt:
+		schema, ok := e.cat.Get(st.Table)
+		if !ok {
+			return nil, fmt.Errorf("table %s does not exist", st.Table)
+		}
+		return &plan.Update{Input: scanNode(schema.Name, st.Where), Table: schema.Name}, nil
+	default:
+		return nil, fmt.Errorf("cannot explain %T", stmt)
 	}
-	var node plan.Node = &plan.SeqScan{Table: table.Name}
-	if selectStmt.Where != nil {
-		node = &plan.Filter{Input: node, Predicate: selectStmt.Where}
-	}
-	node = &plan.Project{Input: node, Columns: selectStmt.Columns}
-	fmt.Println(buildPlan(node, 0))
+}
 
-	return &Result{}, nil
+func scanNode(table string, where ast.Expression) plan.Node {
+	var node plan.Node = &plan.SeqScan{Table: table}
+	if where != nil {
+		node = &plan.Filter{Input: node, Predicate: where}
+	}
+	return node
 }
 
 func buildPlan(node plan.Node, depth int) string {
@@ -284,6 +430,10 @@ func buildPlan(node plan.Node, depth int) string {
 			cols[i] = c.String()
 		}
 		return fmt.Sprintf("%s(project %s)\n", indent, strings.Join(cols, " ")) + buildPlan(n.Input, depth+1)
+	case *plan.Delete:
+		return fmt.Sprintf("%s(delete %s)\n", indent, n.Table) + buildPlan(n.Input, depth+1)
+	case *plan.Update:
+		return fmt.Sprintf("%s(update %s)\n", indent, n.Table) + buildPlan(n.Input, depth+1)
 	default:
 		return fmt.Sprintf("%s(unknown %T)", indent, node)
 	}

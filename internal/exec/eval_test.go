@@ -27,7 +27,7 @@ func intLit(s string) *ast.Literal { return &ast.Literal{Kind: token.INT, Value:
 
 func mustEval(t *testing.T, expr ast.Expression, row storage.Row) values.Value {
 	t.Helper()
-	v, err := eval(expr, row, twoCol)
+	v, err := Eval(expr, row, twoCol)
 	assert.NoError(t, err)
 	return v
 }

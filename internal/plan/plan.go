@@ -22,6 +22,18 @@ type Filter struct {
 	Predicate ast.Expression
 }
 
+type Delete struct {
+	Input Node
+	Table string
+}
+
+type Update struct {
+	Input Node
+	Table string
+}
+
 func (s *SeqScan) isNode() {}
 func (p *Project) isNode() {}
 func (f *Filter) isNode()  {}
+func (d *Delete) isNode()  {}
+func (u *Update) isNode()  {}
