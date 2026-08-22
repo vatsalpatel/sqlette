@@ -22,6 +22,18 @@ type Filter struct {
 	Predicate ast.Expression
 }
 
+type IndexScan struct {
+	Table     string
+	Index     string
+	Column    string
+	Low, High *Bound
+}
+
+type Bound struct {
+	Value     ast.Expression
+	Inclusive bool
+}
+
 type Delete struct {
 	Input Node
 	Table string
@@ -32,8 +44,9 @@ type Update struct {
 	Table string
 }
 
-func (s *SeqScan) isNode() {}
-func (p *Project) isNode() {}
-func (f *Filter) isNode()  {}
-func (d *Delete) isNode()  {}
-func (u *Update) isNode()  {}
+func (s *SeqScan) isNode()   {}
+func (p *Project) isNode()   {}
+func (f *Filter) isNode()    {}
+func (i *IndexScan) isNode() {}
+func (d *Delete) isNode()    {}
+func (u *Update) isNode()    {}

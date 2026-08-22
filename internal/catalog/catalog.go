@@ -9,13 +9,21 @@ import (
 )
 
 type Catalog struct {
-	Tables map[string]*Table
+	Tables  map[string]*Table
+	Indexes map[string]*Index
 }
 
 type Table struct {
 	Name     string
 	Columns  []Column
 	RootPage pager.PageID
+}
+
+type Index struct {
+	Name, Table string
+	Columns     []string
+	Unique      bool
+	RootPage    pager.PageID
 }
 
 type Column struct {
@@ -27,7 +35,8 @@ type Column struct {
 
 func New() *Catalog {
 	return &Catalog{
-		Tables: make(map[string]*Table),
+		Tables:  make(map[string]*Table),
+		Indexes: make(map[string]*Index),
 	}
 }
 
@@ -40,9 +49,33 @@ func (c *Catalog) Create(t *Table) error {
 	return nil
 }
 
+func (c *Catalog) CreateIndex(i *Index) error {
+	i.Name = strings.ToLower(i.Name)
+	if _, ok := c.Indexes[i.Name]; ok {
+		return fmt.Errorf("index %s already exists", i.Name)
+	}
+	c.Indexes[i.Name] = i
+	return nil
+}
+
 func (c *Catalog) Get(name string) (*Table, bool) {
 	t, ok := c.Tables[strings.ToLower(name)]
 	return t, ok
+}
+
+func (c *Catalog) GetIndex(name string) (*Index, bool) {
+	i, ok := c.Indexes[strings.ToLower(name)]
+	return i, ok
+}
+
+func (c *Catalog) IndexesFor(table string) []*Index {
+	var indexes []*Index
+	for _, i := range c.Indexes {
+		if strings.EqualFold(i.Table, table) {
+			indexes = append(indexes, i)
+		}
+	}
+	return indexes
 }
 
 func (t *Table) ColumnIndex(name string) (int, bool) {
@@ -71,6 +104,21 @@ func (c *Catalog) Marshal() []byte {
 				flag |= 2
 			}
 			buf = append(buf, flag)
+		}
+	}
+	buf = binary.AppendUvarint(buf, uint64(len(c.Indexes)))
+	for _, i := range c.Indexes {
+		buf = appendString(buf, i.Name)
+		buf = appendString(buf, i.Table)
+		buf = binary.AppendUvarint(buf, uint64(i.RootPage))
+		var flag byte
+		if i.Unique {
+			flag |= 1
+		}
+		buf = append(buf, flag)
+		buf = binary.AppendUvarint(buf, uint64(len(i.Columns)))
+		for _, c := range i.Columns {
+			buf = appendString(buf, c)
 		}
 	}
 	return buf
@@ -135,6 +183,60 @@ func (c *Catalog) Unmarshal(buf []byte) error {
 		}
 		t.Columns = columns
 		c.Tables[name] = t
+	}
+	indexCount, n2 := binary.Uvarint(buf)
+	if n2 <= 0 {
+		return fmt.Errorf("invalid index count: %v", buf)
+	}
+	buf = buf[n2:]
+	c.Indexes = make(map[string]*Index, indexCount)
+	for range indexCount {
+		name, n1 := readString(buf)
+		if n1 <= 0 {
+			return fmt.Errorf("invalid index name: %v", buf)
+		}
+		buf = buf[n1:]
+
+		tbl, n1 := readString(buf)
+		if n1 <= 0 {
+			return fmt.Errorf("invalid table name: %v", buf)
+		}
+		buf = buf[n1:]
+
+		rootPage, n1 := binary.Uvarint(buf)
+		if n1 <= 0 {
+			return fmt.Errorf("invalid root page: %v", buf)
+		}
+		buf = buf[n1:]
+
+		if len(buf) < 1 {
+			return fmt.Errorf("invalid index flag: %v", buf)
+		}
+		flag := buf[0]
+		buf = buf[1:]
+
+		columnCount, n1 := binary.Uvarint(buf)
+		if n1 <= 0 {
+			return fmt.Errorf("invalid column count: %v", buf)
+		}
+		buf = buf[n1:]
+
+		ix := &Index{
+			Name:     name,
+			Table:    tbl,
+			Columns:  make([]string, columnCount),
+			RootPage: pager.PageID(rootPage),
+			Unique:   flag&1 != 0,
+		}
+		for i := range columnCount {
+			name, n1 := readString(buf)
+			if n1 <= 0 {
+				return fmt.Errorf("invalid column name: %v", buf)
+			}
+			buf = buf[n1:]
+			ix.Columns[i] = name
+		}
+		c.Indexes[name] = ix
 	}
 	return nil
 }

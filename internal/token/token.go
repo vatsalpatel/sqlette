@@ -49,6 +49,9 @@ const (
 	ROLLBACK
 	TRANSACTION
 	END
+	INDEX
+	ON
+	UNIQUE
 
 	// operators & punctuation
 	EQ        // =
@@ -119,6 +122,9 @@ var keywords = map[string]Kind{
 	"ROLLBACK":    ROLLBACK,
 	"TRANSACTION": TRANSACTION,
 	"END":         END,
+	"INDEX":       INDEX,
+	"ON":          ON,
+	"UNIQUE":      UNIQUE,
 }
 
 // Lookup maps a bare identifier to its keyword Kind, or IDENT if it is not a
@@ -168,6 +174,9 @@ var kindNames = map[Kind]string{
 	ROLLBACK:    "ROLLBACK",
 	TRANSACTION: "TRANSACTION",
 	END:         "END",
+	INDEX:       "INDEX",
+	ON:          "ON",
+	UNIQUE:      "UNIQUE",
 	EQ:          "EQ",
 	NEQ:         "NEQ",
 	LT:          "LT",

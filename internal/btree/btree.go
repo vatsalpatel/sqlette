@@ -1,6 +1,7 @@
 package btree
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 
@@ -9,15 +10,23 @@ import (
 
 type node struct {
 	page *pager.Page
+	cmp  Compare
 }
 
 type Tree struct {
 	pager *pager.Pager
 	root  pager.PageID
+	kind  treeKind
+	cmp   Compare
 }
 
-func Create(p *pager.Pager) (*Tree, error) {
-	t := &Tree{pager: p}
+func Create(p *pager.Pager) (*Tree, error) { return create(p, tableTree, compareRowid) }
+func CreateIndex(p *pager.Pager, cmp Compare) (*Tree, error) {
+	return create(p, indexTree, cmp)
+}
+
+func create(p *pager.Pager, k treeKind, cmp Compare) (*Tree, error) {
+	t := &Tree{pager: p, kind: k, cmp: cmp}
 	root, err := t.newLeaf()
 	if err != nil {
 		return nil, err
@@ -27,7 +36,10 @@ func Create(p *pager.Pager) (*Tree, error) {
 }
 
 func Open(p *pager.Pager, root pager.PageID) *Tree {
-	return &Tree{pager: p, root: root}
+	return &Tree{pager: p, root: root, kind: tableTree, cmp: compareRowid}
+}
+func OpenIndex(p *pager.Pager, root pager.PageID, cmp Compare) *Tree {
+	return &Tree{pager: p, root: root, kind: indexTree, cmp: cmp}
 }
 
 func (t *Tree) Root() pager.PageID {
@@ -36,7 +48,7 @@ func (t *Tree) Root() pager.PageID {
 
 func (t *Tree) load(id pager.PageID) (node, error) {
 	p, err := t.pager.Get(id)
-	return node{p}, err
+	return node{p, t.cmp}, err
 }
 
 func (t *Tree) newLeaf() (node, error) {
@@ -44,7 +56,7 @@ func (t *Tree) newLeaf() (node, error) {
 	if err != nil {
 		return node{}, err
 	}
-	return initLeaf(p), nil
+	return initLeaf(p, t.kind, t.cmp), nil
 }
 
 func (t *Tree) newInterior(leftmost pager.PageID) (node, error) {
@@ -52,26 +64,32 @@ func (t *Tree) newInterior(leftmost pager.PageID) (node, error) {
 	if err != nil {
 		return node{}, err
 	}
-	return initInterior(p, leftmost), nil
+	return initInterior(p, leftmost, t.kind, t.cmp), nil
 }
 
-func (t *Tree) search(rowid int64) (leaf node, slot int, found bool, err error) {
+func (t *Tree) search(key []byte) (leaf node, slot int, found bool, err error) {
 	n, err := t.load(t.root)
 	if err != nil {
 		return node{}, 0, false, err
 	}
 	for !n.isLeaf() {
-		n, err = t.load(n.childPage(rowid))
+		n, err = t.load(n.childPage(key))
 		if err != nil {
 			return node{}, 0, false, err
 		}
 	}
-	slot, found = n.search(rowid)
+	slot, found = n.search(key)
 	return n, slot, found, nil
 }
 
 func (t *Tree) Get(rowid int64) (payload []byte, found bool, err error) {
-	leaf, slot, found, err := t.search(rowid)
+	var key [rowidKeySize]byte
+	putRowid(key[:], rowid)
+	return t.get(key[:])
+}
+
+func (t *Tree) get(key []byte) (payload []byte, found bool, err error) {
+	leaf, slot, found, err := t.search(key)
 	if err != nil {
 		return nil, false, err
 	}
@@ -82,10 +100,20 @@ func (t *Tree) Get(rowid int64) (payload []byte, found bool, err error) {
 }
 
 func (t *Tree) Insert(rowid int64, payload []byte) error {
-	if 8+binary.MaxVarintLen64+2+len(payload) > pager.PageSize-headerSize {
+	var key [rowidKeySize]byte
+	putRowid(key[:], rowid)
+	return t.insertKey(key[:], payload)
+}
+
+func (t *Tree) InsertKey(key []byte) error {
+	return t.insertKey(key, nil)
+}
+
+func (t *Tree) insertKey(key []byte, payload []byte) error {
+	if cellKeySize(t.kind, key)+binary.MaxVarintLen64+2+len(payload) > pager.PageSize-headerSize {
 		return errors.New("btree: record too large for one page (overflow is M7)")
 	}
-	split, sep, right, err := t.insert(t.root, rowid, payload)
+	split, sep, right, err := t.insert(t.root, key, payload)
 	if err != nil {
 		return err
 	}
@@ -95,52 +123,53 @@ func (t *Tree) Insert(rowid int64, payload []byte) error {
 	return nil
 }
 
-func (t *Tree) insert(id pager.PageID, rowid int64, payload []byte) (split bool, sep int64, right pager.PageID, err error) {
+func (t *Tree) insert(id pager.PageID, key []byte, payload []byte) (split bool, sep []byte, right pager.PageID, err error) {
 	n, err := t.load(id)
 	if err != nil {
-		return false, 0, 0, err
+		return false, nil, 0, err
 	}
 	if n.isLeaf() {
 		if err := t.pager.Write(n.page); err != nil {
-			return false, 0, 0, err
+			return false, nil, 0, err
 		}
-		if n.insertLeaf(rowid, payload) {
-			return false, 0, 0, nil
+		if n.insertLeaf(key, payload) {
+			return false, nil, 0, nil
 		}
-		sep, right, err = t.splitLeaf(n, rowid, payload)
+		sep, right, err = t.splitLeaf(n, key, payload)
 		if err != nil {
-			return false, 0, 0, err
+			return false, nil, 0, err
 		}
 		return true, sep, right, nil
 	}
 
-	childSplit, sep, right, err := t.insert(n.childPage(rowid), rowid, payload)
+	childSplit, sep, right, err := t.insert(n.childPage(key), key, payload)
 	if err != nil || !childSplit {
-		return false, 0, 0, err
+		return false, nil, 0, err
 	}
 	if err := t.pager.Write(n.page); err != nil {
-		return false, 0, 0, err
+		return false, nil, 0, err
 	}
 	if n.insertInterior(sep, right) {
-		return false, 0, 0, nil
+		return false, nil, 0, nil
 	}
 	sep, right, err = t.splitInterior(n, sep, right)
 	return true, sep, right, err
 }
 
-func (t *Tree) splitLeaf(full node, rowid int64, payload []byte) (int64, pager.PageID, error) {
+func (t *Tree) splitLeaf(full node, key []byte, payload []byte) ([]byte, pager.PageID, error) {
 	cells := make([]leafCell, 0, full.numCells()+1)
 	inserted := false
 	for i := 0; i < full.numCells(); i++ {
 		k := full.key(i)
-		if !inserted && rowid < k {
-			cells = append(cells, leafCell{rowid, payload})
+		if !inserted && t.cmp(key, k) < 0 {
+			cells = append(cells, leafCell{key, payload})
 			inserted = true
 		}
-		cells = append(cells, leafCell{k, append([]byte(nil), full.payload(i)...)})
+		// k is a window into full.page, which the repack below overwrites.
+		cells = append(cells, leafCell{bytes.Clone(k), bytes.Clone(full.payload(i))})
 	}
 	if !inserted {
-		cells = append(cells, leafCell{rowid, payload})
+		cells = append(cells, leafCell{key, payload})
 	}
 
 	mid := len(cells) / 2
@@ -149,10 +178,10 @@ func (t *Tree) splitLeaf(full node, rowid int64, payload []byte) (int64, pager.P
 
 	right, err := t.newLeaf()
 	if err != nil {
-		return 0, 0, err
+		return nil, 0, err
 	}
 
-	initLeaf(full.page)
+	initLeaf(full.page, t.kind, t.cmp)
 	for _, c := range cells[:mid] {
 		full.insertLeaf(c.key, c.val)
 	}
@@ -166,19 +195,19 @@ func (t *Tree) splitLeaf(full node, rowid int64, payload []byte) (int64, pager.P
 	return sep, right.page.ID, nil
 }
 
-func (t *Tree) splitInterior(full node, rowid int64, child pager.PageID) (int64, pager.PageID, error) {
+func (t *Tree) splitInterior(full node, sep []byte, child pager.PageID) ([]byte, pager.PageID, error) {
 	cells := make([]interiorCell, 0, full.numCells()+1)
 	inserted := false
 	for i := 0; i < full.numCells(); i++ {
 		k := full.key(i)
-		if !inserted && rowid < k {
-			cells = append(cells, interiorCell{rowid, child})
+		if !inserted && t.cmp(sep, k) < 0 {
+			cells = append(cells, interiorCell{sep, child})
 			inserted = true
 		}
-		cells = append(cells, interiorCell{k, full.child(i)})
+		cells = append(cells, interiorCell{bytes.Clone(k), full.child(i)})
 	}
 	if !inserted {
-		cells = append(cells, interiorCell{rowid, child})
+		cells = append(cells, interiorCell{sep, child})
 	}
 
 	mid := len(cells) / 2
@@ -187,13 +216,13 @@ func (t *Tree) splitInterior(full node, rowid int64, child pager.PageID) (int64,
 
 	right, err := t.newInterior(median.child)
 	if err != nil {
-		return 0, 0, err
+		return nil, 0, err
 	}
 	for _, c := range cells[mid+1:] {
 		right.insertInterior(c.sep, c.child)
 	}
 
-	initInterior(full.page, leftmost)
+	initInterior(full.page, leftmost, t.kind, t.cmp)
 	for _, c := range cells[:mid] {
 		full.insertInterior(c.sep, c.child)
 	}
@@ -201,7 +230,7 @@ func (t *Tree) splitInterior(full node, rowid int64, child pager.PageID) (int64,
 	return median.sep, right.page.ID, nil
 }
 
-func (t *Tree) growRoot(sep int64, right pager.PageID) error {
+func (t *Tree) growRoot(sep []byte, right pager.PageID) error {
 	root, err := t.load(t.root)
 	if err != nil {
 		return err
@@ -216,12 +245,15 @@ func (t *Tree) growRoot(sep int64, right pager.PageID) error {
 	if err := t.pager.Write(root.page); err != nil {
 		return err
 	}
-	newRoot := initInterior(root.page, left.ID)
+	newRoot := initInterior(root.page, left.ID, t.kind, t.cmp)
 	newRoot.insertInterior(sep, right)
 	return nil
 }
 
 func (t *Tree) MaxRowID() (int64, bool, error) {
+	if t.kind != tableTree {
+		return 0, false, errors.New("btree: MaxRowID only works on table trees")
+	}
 	n, err := t.load(t.root)
 	if err != nil {
 		return 0, false, err
@@ -235,7 +267,7 @@ func (t *Tree) MaxRowID() (int64, bool, error) {
 	if n.numCells() == 0 {
 		return 0, false, nil
 	}
-	return n.key(n.numCells() - 1), true, nil
+	return rowidOf(n.key(n.numCells() - 1)), true, nil
 }
 
 func (t *Tree) Update(rowid int64, payload []byte) (bool, error) {
@@ -250,7 +282,17 @@ func (t *Tree) Update(rowid int64, payload []byte) (bool, error) {
 }
 
 func (t *Tree) Delete(rowid int64) (bool, error) {
-	leaf, slot, found, err := t.search(rowid)
+	var key [rowidKeySize]byte
+	putRowid(key[:], rowid)
+	return t.deleteKey(key[:])
+}
+
+func (t *Tree) DeleteKey(key []byte) (bool, error) {
+	return t.deleteKey(key)
+}
+
+func (t *Tree) deleteKey(key []byte) (bool, error) {
+	leaf, slot, found, err := t.search(key)
 	if err != nil {
 		return false, err
 	}
@@ -264,13 +306,25 @@ func (t *Tree) Delete(rowid int64) (bool, error) {
 	return true, nil
 }
 
+func (t *Tree) Seek(key []byte) *Cursor {
+	c := &Cursor{tree: t}
+	leaf, slot, _, err := t.search(key)
+	if err != nil {
+		c.err = err
+		return c
+	}
+	c.leaf = leaf
+	c.slot = slot - 1
+	return c
+}
+
 type leafCell struct {
-	key int64
+	key []byte
 	val []byte
 }
 
 type interiorCell struct {
-	sep   int64
+	sep   []byte
 	child pager.PageID
 }
 
@@ -322,8 +376,16 @@ func (c *Cursor) RowID() int64 {
 	if c.err != nil {
 		return 0
 	}
+	return rowidOf(c.leaf.key(c.slot))
+}
+
+func (c *Cursor) Key() []byte {
+	if c.err != nil {
+		return nil
+	}
 	return c.leaf.key(c.slot)
 }
+
 func (c *Cursor) Payload() []byte {
 	if c.err != nil {
 		return nil

@@ -107,6 +107,51 @@ func (f *filter) Close() error {
 	return f.input.Close()
 }
 
+type indexScan struct {
+	table     *storage.Table
+	ix        *storage.Index
+	low, high *storage.Bound
+	cursor    storage.Cursor
+}
+
+func (i *indexScan) Open() error {
+	i.cursor = i.table.IndexScan(i.ix, i.low, i.high)
+	return nil
+}
+
+func (i *indexScan) Next() (storage.Row, error) {
+	if i.cursor.Next() {
+		return i.cursor.Row(), nil
+	}
+	if i.cursor.Err() != nil {
+		return nil, i.cursor.Err()
+	}
+	return nil, io.EOF
+}
+
+func (i *indexScan) RowID() int64 { return i.cursor.RowID() }
+
+func (i *indexScan) Close() error { return i.cursor.Close() }
+
+func evalBound(b *plan.Bound) (*storage.Bound, error) {
+	if b == nil {
+		return nil, nil
+	}
+	v, err := EvalConst(b.Value)
+	if err != nil {
+		return nil, err
+	}
+	return &storage.Bound{Value: v, Inclusive: b.Inclusive}, nil
+}
+
+func columnNames(schema *catalog.Table) []string {
+	names := make([]string, len(schema.Columns))
+	for i, c := range schema.Columns {
+		names[i] = c.Name
+	}
+	return names
+}
+
 func Build(node plan.Node, store *storage.Store, schema *catalog.Table) (Operator, []string, error) {
 	switch n := node.(type) {
 	case *plan.SeqScan:
@@ -135,6 +180,24 @@ func Build(node plan.Node, store *storage.Store, schema *catalog.Table) (Operato
 			return nil, nil, err
 		}
 		return &filter{input: child, pred: n.Predicate, schema: schema}, nil, nil
+	case *plan.IndexScan:
+		tbl, ok := store.Table(n.Table)
+		if !ok {
+			return nil, nil, fmt.Errorf("table %s not found", n.Table)
+		}
+		ix, ok := store.Index(n.Index)
+		if !ok {
+			return nil, nil, fmt.Errorf("index %s not found", n.Index)
+		}
+		low, err := evalBound(n.Low)
+		if err != nil {
+			return nil, nil, err
+		}
+		high, err := evalBound(n.High)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &indexScan{table: tbl, ix: ix, low: low, high: high}, columnNames(schema), nil
 	default:
 		return nil, nil, fmt.Errorf("unknown plan node %T", node)
 	}

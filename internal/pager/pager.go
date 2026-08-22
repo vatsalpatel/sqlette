@@ -27,6 +27,7 @@ type Pager struct {
 	journal    *journal.Journal
 	inTxn      bool
 	startCount PageID
+	Reads      int // Counts page accesses, cache hits included; for benchmarking
 }
 
 func Open(path string) (*Pager, error) {
@@ -64,6 +65,7 @@ func Open(path string) (*Pager, error) {
 }
 
 func (p *Pager) Get(id PageID) (*Page, error) {
+	p.Reads++
 	if p.cache[id] != nil {
 		return p.cache[id], nil
 	}

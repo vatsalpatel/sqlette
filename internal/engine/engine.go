@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/vatsalpatel/sqlette/internal/ast"
@@ -10,6 +11,7 @@ import (
 	"github.com/vatsalpatel/sqlette/internal/exec"
 	"github.com/vatsalpatel/sqlette/internal/pager"
 	"github.com/vatsalpatel/sqlette/internal/plan"
+	"github.com/vatsalpatel/sqlette/internal/planner"
 	"github.com/vatsalpatel/sqlette/internal/storage"
 	"github.com/vatsalpatel/sqlette/internal/values"
 )
@@ -57,6 +59,25 @@ func (e *Engine) reload() error {
 		if err := e.store.AttachTable(name, tbl.RootPage); err != nil {
 			return err
 		}
+	}
+	for name, ix := range e.cat.Indexes {
+		ctbl, ok := e.cat.Get(ix.Table)
+		if !ok {
+			return fmt.Errorf("index %s references unknown table %s", name, ix.Table)
+		}
+		stbl, ok := e.store.Table(ix.Table)
+		if !ok {
+			return fmt.Errorf("index %s references unknown table %s", name, ix.Table)
+		}
+		cols, err := columnPositions(ctbl, ix.Columns)
+		if err != nil {
+			return err
+		}
+		attached, err := e.store.AttachIndex(name, ix.RootPage, cols, ix.Unique)
+		if err != nil {
+			return err
+		}
+		stbl.AddIndex(attached)
 	}
 	return nil
 }
@@ -106,6 +127,8 @@ func (e *Engine) dispatch(stmt ast.Statement) (*Result, error) {
 	switch st := stmt.(type) {
 	case *ast.CreateStmt:
 		return e.execCreate(st)
+	case *ast.CreateIndexStmt:
+		return e.execCreateIndex(st)
 	case *ast.InsertStmt:
 		return e.execInsert(st)
 	case *ast.UpdateStmt:
@@ -238,10 +261,7 @@ func (e *Engine) execUpdate(stmt *ast.UpdateStmt) (*Result, error) {
 		indices[i] = idx
 	}
 
-	var node plan.Node = &plan.SeqScan{Table: stmt.Table}
-	if stmt.Where != nil {
-		node = &plan.Filter{Input: node, Predicate: stmt.Where}
-	}
+	node := e.scanNode(schema, stmt.Where)
 	op, _, err := exec.Build(node, e.store, schema)
 	if err != nil {
 		return nil, err
@@ -301,10 +321,7 @@ func (e *Engine) execDelete(stmt *ast.DeleteStmt) (*Result, error) {
 		return nil, fmt.Errorf("table %s does not exist", stmt.Table)
 	}
 
-	var node plan.Node = &plan.SeqScan{Table: stmt.Table}
-	if stmt.Where != nil {
-		node = &plan.Filter{Input: node, Predicate: stmt.Where}
-	}
+	node := e.scanNode(schema, stmt.Where)
 	op, _, err := exec.Build(node, e.store, schema)
 	if err != nil {
 		return nil, err
@@ -346,11 +363,7 @@ func (e *Engine) execSelect(stmt *ast.SelectStmt) (*Result, error) {
 		return nil, fmt.Errorf("table %s does not exist", stmt.From.Name)
 	}
 
-	var node plan.Node = &plan.SeqScan{Table: stmt.From.Name}
-	if stmt.Where != nil {
-		node = &plan.Filter{Input: node, Predicate: stmt.Where}
-	}
-
+	node := e.scanNode(schema, stmt.Where)
 	node = &plan.Project{Input: node, Columns: stmt.Columns}
 	op, cols, err := exec.Build(node, e.store, schema)
 	if err != nil {
@@ -376,6 +389,66 @@ func (e *Engine) execSelect(stmt *ast.SelectStmt) (*Result, error) {
 	return &Result{Columns: cols, Rows: rows}, nil
 }
 
+func (e *Engine) scanNode(schema *catalog.Table, where ast.Expression) plan.Node {
+	ix := e.cat.IndexesFor(schema.Name)
+	slices.SortFunc(ix, func(a, b *catalog.Index) int { return strings.Compare(a.Name, b.Name) })
+	return planner.Scan(schema, ix, where)
+}
+
+func (e *Engine) execCreateIndex(stmt *ast.CreateIndexStmt) (*Result, error) {
+	stmt.Name = strings.ToLower(stmt.Name)
+
+	ctbl, ok := e.cat.Get(stmt.Table)
+	if !ok || ctbl == nil {
+		return nil, fmt.Errorf("table %s does not exist", stmt.Table)
+	}
+	if _, ok := e.cat.GetIndex(stmt.Name); ok {
+		return nil, fmt.Errorf("index %s already exists", stmt.Name)
+	}
+	cols, err := columnPositions(ctbl, stmt.Columns)
+	if err != nil {
+		return nil, err
+	}
+	stbl, ok := e.store.Table(stmt.Table)
+	if !ok || stbl == nil {
+		return nil, fmt.Errorf("table %s does not exist", stmt.Table)
+	}
+
+	ix, err := e.store.CreateIndex(stmt.Name, cols, stmt.Unique)
+	if err != nil {
+		return nil, err
+	}
+	if err := stbl.BuildIndex(ix); err != nil {
+		return nil, err
+	}
+
+	if err := e.cat.CreateIndex(&catalog.Index{
+		Name:     stmt.Name,
+		Table:    stmt.Table,
+		Columns:  stmt.Columns,
+		Unique:   stmt.Unique,
+		RootPage: ix.Root(),
+	}); err != nil {
+		return nil, err
+	}
+	if err := e.store.WriteSchema(e.cat.Marshal()); err != nil {
+		return nil, err
+	}
+	return &Result{Message: "ok"}, nil
+}
+
+func columnPositions(ctbl *catalog.Table, names []string) ([]int, error) {
+	cols := make([]int, len(names))
+	for i, name := range names {
+		idx, ok := ctbl.ColumnIndex(name)
+		if !ok {
+			return nil, fmt.Errorf("column %s not found in table %s", name, ctbl.Name)
+		}
+		cols[i] = idx
+	}
+	return cols, nil
+}
+
 func (e *Engine) execExplain(stmt *ast.ExplainStmt) (*Result, error) {
 	node, err := e.explainPlan(stmt.Stmt)
 	if err != nil {
@@ -391,30 +464,22 @@ func (e *Engine) explainPlan(stmt ast.Statement) (plan.Node, error) {
 		if !ok {
 			return nil, fmt.Errorf("table %s does not exist", st.From.Name)
 		}
-		return &plan.Project{Input: scanNode(schema.Name, st.Where), Columns: st.Columns}, nil
+		return &plan.Project{Input: e.scanNode(schema, st.Where), Columns: st.Columns}, nil
 	case *ast.DeleteStmt:
 		schema, ok := e.cat.Get(st.Table)
 		if !ok {
 			return nil, fmt.Errorf("table %s does not exist", st.Table)
 		}
-		return &plan.Delete{Input: scanNode(schema.Name, st.Where), Table: schema.Name}, nil
+		return &plan.Delete{Input: e.scanNode(schema, st.Where), Table: schema.Name}, nil
 	case *ast.UpdateStmt:
 		schema, ok := e.cat.Get(st.Table)
 		if !ok {
 			return nil, fmt.Errorf("table %s does not exist", st.Table)
 		}
-		return &plan.Update{Input: scanNode(schema.Name, st.Where), Table: schema.Name}, nil
+		return &plan.Update{Input: e.scanNode(schema, st.Where), Table: schema.Name}, nil
 	default:
 		return nil, fmt.Errorf("cannot explain %T", stmt)
 	}
-}
-
-func scanNode(table string, where ast.Expression) plan.Node {
-	var node plan.Node = &plan.SeqScan{Table: table}
-	if where != nil {
-		node = &plan.Filter{Input: node, Predicate: where}
-	}
-	return node
 }
 
 func buildPlan(node plan.Node, depth int) string {
@@ -430,6 +495,8 @@ func buildPlan(node plan.Node, depth int) string {
 			cols[i] = c.String()
 		}
 		return fmt.Sprintf("%s(project %s)\n", indent, strings.Join(cols, " ")) + buildPlan(n.Input, depth+1)
+	case *plan.IndexScan:
+		return fmt.Sprintf("%s(indexscan %s using %s%s)", indent, n.Table, n.Index, indexBounds(n))
 	case *plan.Delete:
 		return fmt.Sprintf("%s(delete %s)\n", indent, n.Table) + buildPlan(n.Input, depth+1)
 	case *plan.Update:
@@ -437,4 +504,27 @@ func buildPlan(node plan.Node, depth int) string {
 	default:
 		return fmt.Sprintf("%s(unknown %T)", indent, node)
 	}
+}
+
+func indexBounds(n *plan.IndexScan) string {
+	if n.Low != nil && n.High != nil &&
+		n.Low.Inclusive && n.High.Inclusive && n.Low.Value == n.High.Value {
+		return fmt.Sprintf(" (= %s %v)", n.Column, n.Low.Value)
+	}
+	var out string
+	if n.Low != nil {
+		op := ">"
+		if n.Low.Inclusive {
+			op = ">="
+		}
+		out += fmt.Sprintf(" (%s %s %v)", op, n.Column, n.Low.Value)
+	}
+	if n.High != nil {
+		op := "<"
+		if n.High.Inclusive {
+			op = "<="
+		}
+		out += fmt.Sprintf(" (%s %s %v)", op, n.Column, n.High.Value)
+	}
+	return out
 }

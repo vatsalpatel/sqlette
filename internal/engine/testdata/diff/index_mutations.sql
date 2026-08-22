@@ -1,0 +1,12 @@
+CREATE TABLE t (a INT, b TEXT);
+INSERT INTO t VALUES (1, 'a'), (3, 'c'), (5, 'e'), (7, 'g'), (9, 'i');
+CREATE INDEX idx_a ON t (a);
+UPDATE t SET b = 'updated' WHERE a = 5;
+SELECT * FROM t;
+DELETE FROM t WHERE a > 7;
+SELECT * FROM t;
+UPDATE t SET a = 100 WHERE a = 1;
+SELECT * FROM t WHERE a = 100;
+SELECT * FROM t WHERE a = 1;
+DELETE FROM t WHERE a >= 3 AND a <= 7;
+SELECT * FROM t;

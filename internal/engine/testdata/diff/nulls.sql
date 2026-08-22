@@ -1,0 +1,8 @@
+CREATE TABLE t (a INT, b TEXT);
+INSERT INTO t VALUES (1, 'a'), (NULL, 'null-a'), (5, NULL), (NULL, NULL), (9, 'i');
+CREATE INDEX idx_a ON t (a);
+SELECT * FROM t;
+SELECT * FROM t WHERE a > 0;
+SELECT * FROM t WHERE a = 5;
+SELECT * FROM t WHERE a > NULL;
+SELECT * FROM t WHERE a = NULL;

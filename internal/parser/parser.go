@@ -381,6 +381,11 @@ func (p *parser) parseDelete() (ast.Statement, error) {
 
 func (p *parser) parseCreate() (ast.Statement, error) {
 	p.advance() // skip CREATE
+
+	if p.peek().Kind == token.UNIQUE || p.peek().Kind == token.INDEX {
+		return p.parseCreateIndex()
+	}
+
 	if !p.accept(token.TABLE) {
 		return nil, Error{Pos: p.peek().Pos, Msg: "expected TABLE"}
 	}
@@ -436,6 +441,48 @@ func (p *parser) parseCreate() (ast.Statement, error) {
 	}
 	if !p.accept(token.RPAREN) {
 		return nil, Error{Pos: p.peek().Pos, Msg: "expected )"}
+	}
+
+	return stmt, nil
+}
+
+func (p *parser) parseCreateIndex() (ast.Statement, error) {
+	stmt := &ast.CreateIndexStmt{}
+	if p.accept(token.UNIQUE) {
+		stmt.Unique = true
+	}
+	if _, err := p.expect(token.INDEX); err != nil {
+		return nil, err
+	}
+	name, err := p.expect(token.IDENT)
+	if err != nil {
+		return nil, err
+	}
+	stmt.Name = name.Lexeme
+	if _, err := p.expect(token.ON); err != nil {
+		return nil, err
+	}
+	tbl, err := p.expect(token.IDENT)
+	if err != nil {
+		return nil, err
+	}
+	stmt.Table = tbl.Lexeme
+
+	if _, err := p.expect(token.LPAREN); err != nil {
+		return nil, err
+	}
+	for {
+		name, err := p.expect(token.IDENT)
+		if err != nil {
+			return nil, err
+		}
+		stmt.Columns = append(stmt.Columns, name.Lexeme)
+		if !p.accept(token.COMMA) {
+			break
+		}
+	}
+	if _, err := p.expect(token.RPAREN); err != nil {
+		return nil, err
 	}
 
 	return stmt, nil

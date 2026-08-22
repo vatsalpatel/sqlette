@@ -38,6 +38,13 @@ type CreateStmt struct {
 	Columns []ColumnDef
 }
 
+type CreateIndexStmt struct {
+	Name    string
+	Table   string
+	Columns []string
+	Unique  bool
+}
+
 type ColumnDef struct {
 	Name       string
 	Type       string
@@ -60,14 +67,15 @@ type ExplainStmt struct {
 	Stmt Statement
 }
 
-func (s *SelectStmt) stmtNode()   {}
-func (s *InsertStmt) stmtNode()   {}
-func (s *UpdateStmt) stmtNode()   {}
-func (s *DeleteStmt) stmtNode()   {}
-func (s *CreateStmt) stmtNode()   {}
-func (s *DropStmt) stmtNode()     {}
-func (s *AlterStmt) stmtNode()    {}
-func (s *BeginStmt) stmtNode()    {}
-func (s *CommitStmt) stmtNode()   {}
-func (s *RollbackStmt) stmtNode() {}
-func (s *ExplainStmt) stmtNode()  {}
+func (s *SelectStmt) stmtNode()      {}
+func (s *InsertStmt) stmtNode()      {}
+func (s *UpdateStmt) stmtNode()      {}
+func (s *DeleteStmt) stmtNode()      {}
+func (s *CreateStmt) stmtNode()      {}
+func (s *CreateIndexStmt) stmtNode() {}
+func (s *DropStmt) stmtNode()        {}
+func (s *AlterStmt) stmtNode()       {}
+func (s *BeginStmt) stmtNode()       {}
+func (s *CommitStmt) stmtNode()      {}
+func (s *RollbackStmt) stmtNode()    {}
+func (s *ExplainStmt) stmtNode()     {}
