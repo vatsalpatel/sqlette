@@ -3,7 +3,6 @@ package engine
 import (
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 
 	"github.com/vatsalpatel/sqlette/internal/ast"
@@ -261,12 +260,12 @@ func (e *Engine) execUpdate(stmt *ast.UpdateStmt) (*Result, error) {
 		indices[i] = idx
 	}
 
-	node := e.scanNode(schema, stmt.Where)
-	op, _, err := exec.Build(node, e.store, schema)
+	node := planner.ScanTable(e.cat, schema, "", stmt.Where)
+	op, scope, err := exec.Build(node, e.store)
 	if err != nil {
 		return nil, err
 	}
-	scanner, ok := op.(exec.RowScanner)
+	scanner, ok := exec.Scanner(op)
 	if !ok {
 		return nil, fmt.Errorf("expected a row scanner, got %T", op)
 	}
@@ -290,7 +289,7 @@ func (e *Engine) execUpdate(stmt *ast.UpdateStmt) (*Result, error) {
 		newRow := make([]values.Value, len(row))
 		copy(newRow, row)
 		for i, a := range stmt.Assigns {
-			val, err := exec.Eval(a.Value, row, schema)
+			val, err := exec.Eval(a.Value, row, scope)
 			if err != nil {
 				return nil, err
 			}
@@ -321,12 +320,12 @@ func (e *Engine) execDelete(stmt *ast.DeleteStmt) (*Result, error) {
 		return nil, fmt.Errorf("table %s does not exist", stmt.Table)
 	}
 
-	node := e.scanNode(schema, stmt.Where)
-	op, _, err := exec.Build(node, e.store, schema)
+	node := planner.ScanTable(e.cat, schema, "", stmt.Where)
+	op, _, err := exec.Build(node, e.store)
 	if err != nil {
 		return nil, err
 	}
-	scanner, ok := op.(exec.RowScanner)
+	scanner, ok := exec.Scanner(op)
 	if !ok {
 		return nil, fmt.Errorf("expected a row scanner, got %T", op)
 	}
@@ -358,14 +357,11 @@ func (e *Engine) execDelete(stmt *ast.DeleteStmt) (*Result, error) {
 }
 
 func (e *Engine) execSelect(stmt *ast.SelectStmt) (*Result, error) {
-	schema, ok := e.cat.Get(stmt.From.Name)
-	if !ok {
-		return nil, fmt.Errorf("table %s does not exist", stmt.From.Name)
+	node, err := planner.Select(e.cat, stmt)
+	if err != nil {
+		return nil, err
 	}
-
-	node := e.scanNode(schema, stmt.Where)
-	node = &plan.Project{Input: node, Columns: stmt.Columns}
-	op, cols, err := exec.Build(node, e.store, schema)
+	op, scope, err := exec.Build(node, e.store)
 	if err != nil {
 		return nil, err
 	}
@@ -386,13 +382,7 @@ func (e *Engine) execSelect(stmt *ast.SelectStmt) (*Result, error) {
 		}
 		rows = append(rows, row)
 	}
-	return &Result{Columns: cols, Rows: rows}, nil
-}
-
-func (e *Engine) scanNode(schema *catalog.Table, where ast.Expression) plan.Node {
-	ix := e.cat.IndexesFor(schema.Name)
-	slices.SortFunc(ix, func(a, b *catalog.Index) int { return strings.Compare(a.Name, b.Name) })
-	return planner.Scan(schema, ix, where)
+	return &Result{Columns: columnNames(scope), Rows: rows}, nil
 }
 
 func (e *Engine) execCreateIndex(stmt *ast.CreateIndexStmt) (*Result, error) {
@@ -460,23 +450,19 @@ func (e *Engine) execExplain(stmt *ast.ExplainStmt) (*Result, error) {
 func (e *Engine) explainPlan(stmt ast.Statement) (plan.Node, error) {
 	switch st := stmt.(type) {
 	case *ast.SelectStmt:
-		schema, ok := e.cat.Get(st.From.Name)
-		if !ok {
-			return nil, fmt.Errorf("table %s does not exist", st.From.Name)
-		}
-		return &plan.Project{Input: e.scanNode(schema, st.Where), Columns: st.Columns}, nil
+		return planner.Select(e.cat, st)
 	case *ast.DeleteStmt:
 		schema, ok := e.cat.Get(st.Table)
 		if !ok {
 			return nil, fmt.Errorf("table %s does not exist", st.Table)
 		}
-		return &plan.Delete{Input: e.scanNode(schema, st.Where), Table: schema.Name}, nil
+		return &plan.Delete{Input: planner.ScanTable(e.cat, schema, "", st.Where), Table: schema.Name}, nil
 	case *ast.UpdateStmt:
 		schema, ok := e.cat.Get(st.Table)
 		if !ok {
 			return nil, fmt.Errorf("table %s does not exist", st.Table)
 		}
-		return &plan.Update{Input: e.scanNode(schema, st.Where), Table: schema.Name}, nil
+		return &plan.Update{Input: planner.ScanTable(e.cat, schema, "", st.Where), Table: schema.Name}, nil
 	default:
 		return nil, fmt.Errorf("cannot explain %T", stmt)
 	}
@@ -497,6 +483,24 @@ func buildPlan(node plan.Node, depth int) string {
 		return fmt.Sprintf("%s(project %s)\n", indent, strings.Join(cols, " ")) + buildPlan(n.Input, depth+1)
 	case *plan.IndexScan:
 		return fmt.Sprintf("%s(indexscan %s using %s%s)", indent, n.Table, n.Index, indexBounds(n))
+	case *plan.OneRow:
+		return fmt.Sprintf("%s(onerow)", indent)
+	case *plan.Sort:
+		terms := make([]string, len(n.Keys))
+		for i, k := range n.Keys {
+			dir := "asc"
+			if k.Desc {
+				dir = "desc"
+			}
+			terms[i] = fmt.Sprintf("(%s %v)", dir, k.Expr)
+		}
+		return fmt.Sprintf("%s(sort %s)\n", indent, strings.Join(terms, " ")) + buildPlan(n.Input, depth+1)
+	case *plan.Limit:
+		out := fmt.Sprintf("%s(limit %d", indent, n.Count)
+		if n.Offset > 0 {
+			out += fmt.Sprintf(" offset %d", n.Offset)
+		}
+		return out + ")\n" + buildPlan(n.Input, depth+1)
 	case *plan.Delete:
 		return fmt.Sprintf("%s(delete %s)\n", indent, n.Table) + buildPlan(n.Input, depth+1)
 	case *plan.Update:
@@ -527,4 +531,12 @@ func indexBounds(n *plan.IndexScan) string {
 		out += fmt.Sprintf(" (%s %s %v)", op, n.Column, n.High.Value)
 	}
 	return out
+}
+
+func columnNames(s exec.Scope) []string {
+	names := make([]string, len(s))
+	for i, c := range s {
+		names[i] = c.Name
+	}
+	return names
 }

@@ -52,6 +52,12 @@ const (
 	INDEX
 	ON
 	UNIQUE
+	ORDER
+	BY
+	ASC
+	DESC
+	LIMIT
+	OFFSET
 
 	// operators & punctuation
 	EQ        // =
@@ -125,6 +131,12 @@ var keywords = map[string]Kind{
 	"INDEX":       INDEX,
 	"ON":          ON,
 	"UNIQUE":      UNIQUE,
+	"ORDER":       ORDER,
+	"BY":          BY,
+	"ASC":         ASC,
+	"DESC":        DESC,
+	"LIMIT":       LIMIT,
+	"OFFSET":      OFFSET,
 }
 
 // Lookup maps a bare identifier to its keyword Kind, or IDENT if it is not a
@@ -177,6 +189,12 @@ var kindNames = map[Kind]string{
 	INDEX:       "INDEX",
 	ON:          "ON",
 	UNIQUE:      "UNIQUE",
+	ORDER:       "ORDER",
+	BY:          "BY",
+	ASC:         "ASC",
+	DESC:        "DESC",
+	LIMIT:       "LIMIT",
+	OFFSET:      "OFFSET",
 	EQ:          "EQ",
 	NEQ:         "NEQ",
 	LT:          "LT",

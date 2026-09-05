@@ -4,6 +4,9 @@ type SelectStmt struct {
 	Columns []ResultColumn
 	From    TableRef
 	Where   Expression
+	OrderBy []OrderTerm
+	Limit   Expression
+	Offset  Expression
 }
 
 type ResultColumn struct {
@@ -14,6 +17,11 @@ type ResultColumn struct {
 type TableRef struct {
 	Name  string
 	Alias string
+}
+
+type OrderTerm struct {
+	Expr Expression
+	Desc bool
 }
 
 type InsertStmt struct {

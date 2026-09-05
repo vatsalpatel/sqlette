@@ -105,6 +105,43 @@ func (p *parser) parseSelect() (ast.Statement, error) {
 		stmt.Where = where
 	}
 
+	if p.accept(token.ORDER) {
+		if _, err := p.expect(token.BY); err != nil {
+			return nil, err
+		}
+		for {
+			expr, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			term := ast.OrderTerm{Expr: expr}
+			if p.accept(token.DESC) {
+				term.Desc = true
+			} else {
+				p.accept(token.ASC)
+			}
+			stmt.OrderBy = append(stmt.OrderBy, term)
+			if !p.accept(token.COMMA) {
+				break
+			}
+		}
+	}
+
+	if p.accept(token.LIMIT) {
+		lim, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		stmt.Limit = lim
+		if p.accept(token.OFFSET) {
+			offset, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			stmt.Offset = offset
+		}
+	}
+
 	return stmt, nil
 }
 

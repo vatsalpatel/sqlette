@@ -62,6 +62,23 @@ func (s *SelectStmt) String() string {
 	if s.Where != nil {
 		out += fmt.Sprintf(" (where %v)", s.Where)
 	}
+	if len(s.OrderBy) > 0 {
+		terms := make([]string, len(s.OrderBy))
+		for i, o := range s.OrderBy {
+			dir := "asc"
+			if o.Desc {
+				dir = "desc"
+			}
+			terms[i] = fmt.Sprintf("(%s %v)", dir, o.Expr)
+		}
+		out += " (order " + strings.Join(terms, " ") + ")"
+	}
+	if s.Limit != nil {
+		out += fmt.Sprintf(" (limit %v)", s.Limit)
+	}
+	if s.Offset != nil {
+		out += fmt.Sprintf(" (offset %v)", s.Offset)
+	}
 	return out + ")"
 }
 

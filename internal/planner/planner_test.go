@@ -38,12 +38,19 @@ func where(t *testing.T, expr string) ast.Expression {
 
 func mustSeqScan(t *testing.T, node plan.Node) {
 	t.Helper()
+	mustSeqScanNode(t, node)
+}
+
+func mustSeqScanNode(t *testing.T, node plan.Node) *plan.SeqScan {
+	t.Helper()
 	if f, ok := node.(*plan.Filter); ok {
 		node = f.Input
 	}
-	if _, ok := node.(*plan.SeqScan); !ok {
+	s, ok := node.(*plan.SeqScan)
+	if !ok {
 		t.Fatalf("want a SeqScan, got %T", node)
 	}
+	return s
 }
 
 func mustIndexScan(t *testing.T, node plan.Node) *plan.IndexScan {
@@ -79,7 +86,7 @@ func boundOf(b *plan.Bound) string {
 }
 
 func TestScanWithoutWhere(t *testing.T) {
-	node := planner.Scan(table(), []*catalog.Index{index("idx_a", "a")}, nil)
+	node := planner.Scan(table(), "", []*catalog.Index{index("idx_a", "a")}, nil)
 	mustSeqScan(t, node)
 	assert.Equal(t, "", residualOf(node))
 }
@@ -87,13 +94,13 @@ func TestScanWithoutWhere(t *testing.T) {
 // Passing nil indexes must reproduce the pre-index plan exactly. This is the
 // hook that lets any query be run both ways and diffed.
 func TestScanWithNilIndexesAlwaysSeqScans(t *testing.T) {
-	node := planner.Scan(table(), nil, where(t, "a = 5"))
+	node := planner.Scan(table(), "", nil, where(t, "a = 5"))
 	mustSeqScan(t, node)
 	assert.Equal(t, "(= a 5)", residualOf(node))
 }
 
 func TestScanPicksIndexForEquality(t *testing.T) {
-	node := planner.Scan(table(), []*catalog.Index{index("idx_a", "a")}, where(t, "a = 5"))
+	node := planner.Scan(table(), "", []*catalog.Index{index("idx_a", "a")}, where(t, "a = 5"))
 
 	is := mustIndexScan(t, node)
 	assert.Equal(t, "idx_a", is.Index)
@@ -106,7 +113,7 @@ func TestScanPicksIndexForEquality(t *testing.T) {
 // EXPLAIN renders (= a 5) by checking whether the two bounds hold the *same*
 // expression node, so an equality has to reuse one literal at both ends.
 func TestEqualityReusesOneExpressionAtBothEnds(t *testing.T) {
-	node := planner.Scan(table(), []*catalog.Index{index("idx_a", "a")}, where(t, "a = 5"))
+	node := planner.Scan(table(), "", []*catalog.Index{index("idx_a", "a")}, where(t, "a = 5"))
 
 	is := mustIndexScan(t, node)
 	if is.Low.Value != is.High.Value {
@@ -133,7 +140,7 @@ func TestScanRanges(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.expr, func(t *testing.T) {
-			node := planner.Scan(table(), []*catalog.Index{index("idx_a", "a")}, where(t, c.expr))
+			node := planner.Scan(table(), "", []*catalog.Index{index("idx_a", "a")}, where(t, c.expr))
 			is := mustIndexScan(t, node)
 			assert.Equal(t, c.low, boundOf(is.Low))
 			assert.Equal(t, c.high, boundOf(is.High))
@@ -159,7 +166,7 @@ func TestUncoveredConjunctsStayInTheResidual(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.expr, func(t *testing.T) {
-			node := planner.Scan(table(), []*catalog.Index{index("idx_a", "a")}, where(t, c.expr))
+			node := planner.Scan(table(), "", []*catalog.Index{index("idx_a", "a")}, where(t, c.expr))
 			mustIndexScan(t, node)
 			assert.Equal(t, c.want, residualOf(node))
 		})
@@ -183,7 +190,7 @@ func TestScanFallsBackToSeqScan(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			node := planner.Scan(table(), []*catalog.Index{index("idx_a", "a")}, where(t, c.expr))
+			node := planner.Scan(table(), "", []*catalog.Index{index("idx_a", "a")}, where(t, c.expr))
 			mustSeqScan(t, node)
 		})
 	}
@@ -193,13 +200,13 @@ func TestScanFallsBackToSeqScan(t *testing.T) {
 func TestMultiColumnIndexUsesLeadingColumnOnly(t *testing.T) {
 	ix := index("idx_ab", "a", "b")
 
-	node := planner.Scan(table(), []*catalog.Index{ix}, where(t, "a = 5 AND b = 'x'"))
+	node := planner.Scan(table(), "", []*catalog.Index{ix}, where(t, "a = 5 AND b = 'x'"))
 	is := mustIndexScan(t, node)
 	assert.Equal(t, "a", is.Column)
 	assert.Equal(t, "(= b 'x')", residualOf(node))
 
 	// a predicate on the second column alone cannot be served by this index
-	mustSeqScan(t, planner.Scan(table(), []*catalog.Index{ix}, where(t, "b = 'x'")))
+	mustSeqScan(t, planner.Scan(table(), "", []*catalog.Index{ix}, where(t, "b = 'x'")))
 }
 
 // Given a choice, an equality beats a two-sided range beats a one-sided one.
@@ -207,17 +214,17 @@ func TestIndexSelectionPrefersTheTighterPredicate(t *testing.T) {
 	idxA, idxB := index("idx_a", "a"), index("idx_b", "b")
 	indexes := []*catalog.Index{idxA, idxB}
 
-	is := mustIndexScan(t, planner.Scan(table(), indexes, where(t, "a > 1 AND b = 'x'")))
+	is := mustIndexScan(t, planner.Scan(table(), "", indexes, where(t, "a > 1 AND b = 'x'")))
 	assert.Equal(t, "idx_b", is.Index)
 
-	is = mustIndexScan(t, planner.Scan(table(), indexes, where(t, "a = 5 AND b > 'x'")))
+	is = mustIndexScan(t, planner.Scan(table(), "", indexes, where(t, "a = 5 AND b > 'x'")))
 	assert.Equal(t, "idx_a", is.Index)
 
-	is = mustIndexScan(t, planner.Scan(table(), indexes, where(t, "a > 1 AND a < 9 AND b > 'x'")))
+	is = mustIndexScan(t, planner.Scan(table(), "", indexes, where(t, "a > 1 AND a < 9 AND b > 'x'")))
 	assert.Equal(t, "idx_a", is.Index)
 }
 
 func TestScanIsCaseInsensitiveOnColumnNames(t *testing.T) {
-	node := planner.Scan(table(), []*catalog.Index{index("idx_a", "a")}, where(t, "A = 5"))
+	node := planner.Scan(table(), "", []*catalog.Index{index("idx_a", "a")}, where(t, "A = 5"))
 	mustIndexScan(t, node)
 }

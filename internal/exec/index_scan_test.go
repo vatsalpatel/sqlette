@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/vatsalpatel/sqlette/internal/assert"
-	"github.com/vatsalpatel/sqlette/internal/catalog"
 	"github.com/vatsalpatel/sqlette/internal/plan"
 	"github.com/vatsalpatel/sqlette/internal/storage"
 	"github.com/vatsalpatel/sqlette/internal/token"
@@ -19,13 +18,9 @@ import (
 // Filter(SeqScan): the two access paths must select the same rows, compared as
 // a set, because index order and rowid order genuinely differ.
 
-var indexTestSchema = &catalog.Table{
-	Name: "t",
-	Columns: []catalog.Column{
-		{Name: "a", Type: "INT"},
-		{Name: "name", Type: "TEXT"},
-	},
-}
+// The planner stamps a scan node with the column names it resolved, so the
+// executor can build a scope without ever seeing the catalog.
+var indexTestColumns = []string{"a", "name"}
 
 // rows deliberately repeat values of a, so the rowid suffix is always in play,
 // and are inserted out of order so index order never coincides with rowid order.
@@ -59,7 +54,7 @@ func newIndexedStore(t *testing.T, columns []int, rows []storage.Row) *storage.S
 
 func runPlan(t *testing.T, node plan.Node, s *storage.Store) []storage.Row {
 	t.Helper()
-	op, _, err := Build(node, s, indexTestSchema)
+	op, _, err := Build(node, s)
 	assert.NoError(t, err)
 	assert.NoError(t, op.Open())
 	defer op.Close()
@@ -91,7 +86,7 @@ func bound(v string, inclusive bool) *plan.Bound {
 }
 
 func indexScanNode(low, high *plan.Bound) *plan.IndexScan {
-	return &plan.IndexScan{Table: "t", Index: "idx_a", Column: "a", Low: low, High: high}
+	return &plan.IndexScan{Table: "t", Columns: indexTestColumns, Index: "idx_a", Column: "a", Low: low, High: high}
 }
 
 func assertNames(t *testing.T, want []string, rows []storage.Row) {
@@ -182,7 +177,7 @@ func TestIndexScanSelectsSameRowsAsSeqScan(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			viaIndex := names(runPlan(t, indexScanNode(c.low, c.high), s))
 			viaScan := names(runPlan(t, &plan.Filter{
-				Input:     &plan.SeqScan{Table: "t"},
+				Input:     &plan.SeqScan{Table: "t", Columns: indexTestColumns},
 				Predicate: bin(c.op, col("a"), intLit(c.operand)),
 			}, s))
 
@@ -205,10 +200,10 @@ func TestIndexScanReportsRowIDs(t *testing.T) {
 	op, _, err := Build(indexScanNode(
 		&plan.Bound{Value: lit, Inclusive: true},
 		&plan.Bound{Value: lit, Inclusive: true},
-	), s, indexTestSchema)
+	), s)
 	assert.NoError(t, err)
 
-	scanner, ok := op.(RowScanner)
+	scanner, ok := Scanner(op)
 	assert.True(t, ok)
 	assert.NoError(t, scanner.Open())
 	defer scanner.Close()
@@ -267,11 +262,11 @@ func TestIndexScanOnEmptyTable(t *testing.T) {
 func TestIndexScanBuildErrors(t *testing.T) {
 	s := newIndexedStore(t, []int{0}, indexTestRows)
 
-	_, _, err := Build(&plan.IndexScan{Table: "nosuch", Index: "idx_a"}, s, indexTestSchema)
+	_, _, err := Build(&plan.IndexScan{Table: "nosuch", Index: "idx_a"}, s)
 	if err == nil {
 		t.Fatal("Build on an unknown table should error")
 	}
-	_, _, err = Build(&plan.IndexScan{Table: "t", Index: "nosuch"}, s, indexTestSchema)
+	_, _, err = Build(&plan.IndexScan{Table: "t", Index: "nosuch"}, s)
 	if err == nil {
 		t.Fatal("Build on an unknown index should error")
 	}

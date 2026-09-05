@@ -3,10 +3,10 @@ package exec
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 
 	"github.com/vatsalpatel/sqlette/internal/ast"
-	"github.com/vatsalpatel/sqlette/internal/catalog"
 	"github.com/vatsalpatel/sqlette/internal/plan"
 	"github.com/vatsalpatel/sqlette/internal/storage"
 	"github.com/vatsalpatel/sqlette/internal/token"
@@ -21,6 +21,20 @@ type Operator interface {
 type RowScanner interface {
 	Operator
 	RowID() int64
+}
+
+func Scanner(op Operator) (RowScanner, bool) {
+	switch o := op.(type) {
+	case *seqScan:
+		return o, true
+	case *indexScan:
+		return o, true
+	case *filter:
+		if o.scanner != nil {
+			return o, true
+		}
+	}
+	return nil, false
 }
 
 type seqScan struct {
@@ -49,8 +63,9 @@ func (s *seqScan) Close() error {
 }
 
 type project struct {
-	input   Operator
-	indices []int
+	input Operator
+	exprs []ast.Expression
+	scope Scope
 }
 
 func (p *project) Open() error {
@@ -62,9 +77,13 @@ func (p *project) Next() (storage.Row, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make(storage.Row, len(p.indices))
-	for i, idx := range p.indices {
-		out[i] = row[idx]
+	out := make(storage.Row, len(p.exprs))
+	for i, expr := range p.exprs {
+		v, err := Eval(expr, row, p.scope)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
 	}
 	return out, nil
 }
@@ -74,9 +93,10 @@ func (p *project) Close() error {
 }
 
 type filter struct {
-	input  Operator
-	pred   ast.Expression
-	schema *catalog.Table
+	input   Operator
+	scanner RowScanner
+	pred    ast.Expression
+	scope   Scope
 }
 
 func (f *filter) Open() error {
@@ -89,7 +109,7 @@ func (f *filter) Next() (storage.Row, error) {
 		if err != nil {
 			return nil, err
 		}
-		v, err := Eval(f.pred, row, f.schema)
+		v, err := Eval(f.pred, row, f.scope)
 		if err != nil {
 			return nil, err
 		}
@@ -100,7 +120,7 @@ func (f *filter) Next() (storage.Row, error) {
 }
 
 func (f *filter) RowID() int64 {
-	return f.input.(RowScanner).RowID()
+	return f.scanner.RowID()
 }
 
 func (f *filter) Close() error {
@@ -133,6 +153,121 @@ func (i *indexScan) RowID() int64 { return i.cursor.RowID() }
 
 func (i *indexScan) Close() error { return i.cursor.Close() }
 
+type oneRow struct {
+	done bool
+}
+
+func (o *oneRow) Open() error { o.done = false; return nil }
+
+func (o *oneRow) Next() (storage.Row, error) {
+	if o.done {
+		return nil, io.EOF
+	}
+	o.done = true
+	return storage.Row{}, nil
+}
+
+func (o *oneRow) Close() error { return nil }
+
+type sortRow struct {
+	row  storage.Row
+	keys []values.Value
+}
+
+type sortKey struct {
+	expr ast.Expression
+	desc bool
+}
+
+type sortOp struct {
+	input Operator
+	keys  []sortKey
+	scope Scope
+	rows  []sortRow
+	idx   int
+}
+
+func (s *sortOp) Open() error {
+	if err := s.input.Open(); err != nil {
+		return err
+	}
+	s.rows, s.idx = nil, 0
+	for {
+		row, err := s.input.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		keys := make([]values.Value, len(s.keys))
+		for i, key := range s.keys {
+			v, err := Eval(key.expr, row, s.scope)
+			if err != nil {
+				return err
+			}
+			keys[i] = v
+		}
+		s.rows = append(s.rows, sortRow{row: row, keys: keys})
+	}
+	slices.SortStableFunc(s.rows, func(a, b sortRow) int {
+		for i, key := range s.keys {
+			if c := values.Compare(a.keys[i], b.keys[i]); c != 0 {
+				if key.desc {
+					return -c
+				}
+				return c
+			}
+		}
+		return 0
+	})
+	return nil
+}
+
+func (s *sortOp) Next() (storage.Row, error) {
+	if s.idx >= len(s.rows) {
+		return nil, io.EOF
+	}
+	out := s.rows[s.idx].row
+	s.idx++
+	return out, nil
+}
+
+func (s *sortOp) Close() error { return s.input.Close() }
+
+type limitOp struct {
+	input   Operator
+	count   int64
+	offset  int64
+	seen    int64
+	skipped int64
+}
+
+func (l *limitOp) Open() error {
+	l.seen, l.skipped = 0, 0
+	return l.input.Open()
+}
+
+func (l *limitOp) Next() (storage.Row, error) {
+	for l.skipped < l.offset {
+		if _, err := l.input.Next(); err != nil {
+			return nil, err
+		}
+		l.skipped++
+	}
+	if l.count >= 0 && l.seen >= l.count {
+		return nil, io.EOF
+	}
+	row, err := l.input.Next()
+	if err != nil {
+		return nil, err
+	}
+	l.seen++
+	return row, nil
+}
+
+func (l *limitOp) Close() error { return l.input.Close() }
+
 func evalBound(b *plan.Bound) (*storage.Bound, error) {
 	if b == nil {
 		return nil, nil
@@ -144,42 +279,35 @@ func evalBound(b *plan.Bound) (*storage.Bound, error) {
 	return &storage.Bound{Value: v, Inclusive: b.Inclusive}, nil
 }
 
-func columnNames(schema *catalog.Table) []string {
-	names := make([]string, len(schema.Columns))
-	for i, c := range schema.Columns {
-		names[i] = c.Name
-	}
-	return names
-}
-
-func Build(node plan.Node, store *storage.Store, schema *catalog.Table) (Operator, []string, error) {
+func Build(node plan.Node, store *storage.Store) (Operator, Scope, error) {
 	switch n := node.(type) {
 	case *plan.SeqScan:
 		tbl, ok := store.Table(n.Table)
 		if !ok {
 			return nil, nil, fmt.Errorf("table %s not found", n.Table)
 		}
-		names := make([]string, len(schema.Columns))
-		for i, c := range schema.Columns {
-			names[i] = c.Name
-		}
-		return &seqScan{table: tbl}, names, nil
+		return &seqScan{table: tbl}, scanScope(n.Table, n.Alias, n.Columns), nil
 	case *plan.Project:
-		child, _, err := Build(n.Input, store, schema)
+		child, scope, err := Build(n.Input, store)
 		if err != nil {
 			return nil, nil, err
 		}
-		indices, names, err := bindColumns(n.Columns, schema)
+		exprs, out, err := bindColumns(n.Columns, scope)
 		if err != nil {
 			return nil, nil, err
 		}
-		return &project{input: child, indices: indices}, names, nil
+		return &project{input: child, exprs: exprs, scope: scope}, out, nil
 	case *plan.Filter:
-		child, _, err := Build(n.Input, store, schema)
+		child, scope, err := Build(n.Input, store)
 		if err != nil {
 			return nil, nil, err
 		}
-		return &filter{input: child, pred: n.Predicate, schema: schema}, nil, nil
+		if err := validate(n.Predicate, scope); err != nil {
+			return nil, nil, err
+		}
+		f := &filter{input: child, pred: n.Predicate, scope: scope}
+		f.scanner, _ = Scanner(child)
+		return f, scope, nil
 	case *plan.IndexScan:
 		tbl, ok := store.Table(n.Table)
 		if !ok {
@@ -197,54 +325,87 @@ func Build(node plan.Node, store *storage.Store, schema *catalog.Table) (Operato
 		if err != nil {
 			return nil, nil, err
 		}
-		return &indexScan{table: tbl, ix: ix, low: low, high: high}, columnNames(schema), nil
+		return &indexScan{table: tbl, ix: ix, low: low, high: high}, scanScope(n.Table, n.Alias, n.Columns), nil
+	case *plan.OneRow:
+		return &oneRow{}, Scope{}, nil
+	case *plan.Sort:
+		child, scope, err := Build(n.Input, store)
+		if err != nil {
+			return nil, nil, err
+		}
+		keys := make([]sortKey, len(n.Keys))
+		for i, key := range n.Keys {
+			if err := validate(key.Expr, scope); err != nil {
+				return nil, nil, err
+			}
+			keys[i] = sortKey{expr: key.Expr, desc: key.Desc}
+		}
+		return &sortOp{input: child, keys: keys, scope: scope}, scope, nil
+	case *plan.Limit:
+		child, scope, err := Build(n.Input, store)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &limitOp{input: child, count: n.Count, offset: n.Offset}, scope, nil
 	default:
 		return nil, nil, fmt.Errorf("unknown plan node %T", node)
 	}
 }
 
-func bindColumns(cols []ast.ResultColumn, schema *catalog.Table) ([]int, []string, error) {
-	var indices []int
-	var names []string
+func bindColumns(cols []ast.ResultColumn, in Scope) ([]ast.Expression, Scope, error) {
+	var exprs []ast.Expression
+	var out Scope
 	for _, col := range cols {
 		switch expr := col.Expr.(type) {
 		case *ast.Star:
-			for i, c := range schema.Columns {
-				indices = append(indices, i)
-				names = append(names, c.Name)
+			idxs, err := in.Expand(expr)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, idx := range idxs {
+				exprs = append(exprs, &ast.ColumnRef{Table: in[idx].Table, Name: in[idx].Name})
+				out = append(out, in[idx])
 			}
 		case *ast.ColumnRef:
-			idx, ok := schema.ColumnIndex(expr.Name)
-			if !ok {
-				return nil, nil, fmt.Errorf("column %s not found", expr.Name)
+			i, err := in.Resolve(expr)
+			if err != nil {
+				return nil, nil, err
 			}
-			indices = append(indices, idx)
-			name := expr.Name
+			exprs = append(exprs, expr)
 			if col.Alias != "" {
-				name = col.Alias
+				out = append(out, Column{Name: col.Alias})
+			} else {
+				out = append(out, in[i])
 			}
-			names = append(names, name)
 		default:
-			return nil, nil, fmt.Errorf("unknown select expression %T", col.Expr)
+			if err := validate(col.Expr, in); err != nil {
+				return nil, nil, err
+			}
+			exprs = append(exprs, col.Expr)
+			name := col.Alias
+			if name == "" {
+				name = fmt.Sprintf("%v", col.Expr)
+			}
+			out = append(out, Column{Name: name})
 		}
 	}
-	return indices, names, nil
+	return exprs, out, nil
 }
 
-func Eval(pred ast.Expression, row storage.Row, schema *catalog.Table) (values.Value, error) {
+func Eval(pred ast.Expression, row storage.Row, scope Scope) (values.Value, error) {
 	switch pred := pred.(type) {
 	case *ast.Literal:
 		return EvalConst(pred)
 	case *ast.ColumnRef:
-		idx, ok := schema.ColumnIndex(pred.Name)
-		if !ok {
-			return values.NewNull(), fmt.Errorf("column %s not found", pred.Name)
+		idx, err := scope.Resolve(pred)
+		if err != nil {
+			return values.NewNull(), err
 		}
 		return row[idx], nil
 	case *ast.Unary:
 		switch pred.Op {
 		case token.NOT:
-			op, err := Eval(pred.Operand, row, schema)
+			op, err := Eval(pred.Operand, row, scope)
 			if err != nil {
 				return values.NewNull(), err
 			}
@@ -253,11 +414,11 @@ func Eval(pred ast.Expression, row storage.Row, schema *catalog.Table) (values.V
 			return values.NewNull(), fmt.Errorf("unknown unary operator %s", pred.Op)
 		}
 	case *ast.Binary:
-		l, err := Eval(pred.Left, row, schema)
+		l, err := Eval(pred.Left, row, scope)
 		if err != nil {
 			return values.NewNull(), err
 		}
-		r, err := Eval(pred.Right, row, schema)
+		r, err := Eval(pred.Right, row, scope)
 		if err != nil {
 			return values.NewNull(), err
 		}
@@ -387,4 +548,20 @@ func EvalConst(expr ast.Expression) (values.Value, error) {
 	default:
 		return values.Value{}, fmt.Errorf("unknown literal kind %s", lit.Kind)
 	}
+}
+
+func validate(expr ast.Expression, in Scope) error {
+	switch e := expr.(type) {
+	case *ast.ColumnRef:
+		_, err := in.Resolve(e)
+		return err
+	case *ast.Binary:
+		if err := validate(e.Left, in); err != nil {
+			return err
+		}
+		return validate(e.Right, in)
+	case *ast.Unary:
+		return validate(e.Operand, in)
+	}
+	return nil
 }

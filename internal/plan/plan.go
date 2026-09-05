@@ -9,7 +9,9 @@ type Node interface {
 }
 
 type SeqScan struct {
-	Table string
+	Table   string
+	Alias   string
+	Columns []string
 }
 
 type Project struct {
@@ -24,9 +26,29 @@ type Filter struct {
 
 type IndexScan struct {
 	Table     string
+	Alias     string
+	Columns   []string
 	Index     string
 	Column    string
 	Low, High *Bound
+}
+
+type OneRow struct{}
+
+type Sort struct {
+	Input Node
+	Keys  []SortKey
+}
+
+type SortKey struct {
+	Expr ast.Expression
+	Desc bool
+}
+
+type Limit struct {
+	Input  Node
+	Count  int64 // -1 for no limit
+	Offset int64
 }
 
 type Bound struct {
@@ -48,5 +70,8 @@ func (s *SeqScan) isNode()   {}
 func (p *Project) isNode()   {}
 func (f *Filter) isNode()    {}
 func (i *IndexScan) isNode() {}
+func (o *OneRow) isNode()    {}
+func (s *Sort) isNode()      {}
+func (l *Limit) isNode()     {}
 func (d *Delete) isNode()    {}
 func (u *Update) isNode()    {}

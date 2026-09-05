@@ -1,21 +1,16 @@
 package exec
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/vatsalpatel/sqlette/internal/assert"
 	"github.com/vatsalpatel/sqlette/internal/ast"
-	"github.com/vatsalpatel/sqlette/internal/catalog"
 	"github.com/vatsalpatel/sqlette/internal/storage"
 	"github.com/vatsalpatel/sqlette/internal/token"
 	"github.com/vatsalpatel/sqlette/internal/values"
 )
 
-var twoCol = &catalog.Table{
-	Name:    "t",
-	Columns: []catalog.Column{{Name: "a"}, {Name: "b"}},
-}
+var twoCol = Scope{{Table: "t", Name: "a"}, {Table: "t", Name: "b"}}
 
 func col(name string) *ast.ColumnRef { return &ast.ColumnRef{Name: name} }
 
@@ -91,7 +86,6 @@ func TestEvalAnd(t *testing.T) {
 		{N, T, N}, {N, F, F}, {N, N, N},
 	}
 	for _, tt := range tests {
-		fmt.Println(tt)
 		t.Run(tt.a.String()+" AND "+tt.b.String(), func(t *testing.T) {
 			row := storage.Row{tt.a, tt.b}
 			got := mustEval(t, bin(token.AND, col("a"), col("b")), row)
